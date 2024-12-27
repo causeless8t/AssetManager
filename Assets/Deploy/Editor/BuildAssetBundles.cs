@@ -24,8 +24,6 @@ namespace Causeless3t.AssetBundle.Editor
 
 		private static readonly string BuildInfoPath = Application.dataPath + "/BuildAssetBundles.dat";
 
-		private static readonly string BUNDLE_ROOT = "contents";
-
 		private BundleBuildInfo _bundleBuildInfo = new();
 		private Vector2 _scrollPos = new Vector2();
 
@@ -504,7 +502,7 @@ namespace Causeless3t.AssetBundle.Editor
 
 		private string GetBundleFileInfoPath()
 		{
-			return Path.Combine(_bundleBuildInfo.OutputPath, BUNDLE_ROOT, "AssetFileInfo.txt");
+			return Path.Combine(_bundleBuildInfo.OutputPath, "AssetFileInfo.txt");
 		}
 		
 		private bool CompareAndBuildRoutine(string bundleTargetPath, List<UnityEngine.Object> objectList)
