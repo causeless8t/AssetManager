@@ -24,7 +24,7 @@ namespace Causeless3t.AssetBundle.Editor
 
 		private static readonly string BuildInfoPath = Application.dataPath + "/BuildAssetBundles.dat";
 
-		private static readonly string BUNDLE_ROOT = "/AssetBundles/contents";
+		private static readonly string BUNDLE_ROOT = "contents";
 
 		private BundleBuildInfo _bundleBuildInfo = new();
 		private Vector2 _scrollPos = new Vector2();
@@ -504,9 +504,7 @@ namespace Causeless3t.AssetBundle.Editor
 
 		private string GetBundleFileInfoPath()
 		{
-			string customPath = Application.dataPath;
-			DirectoryInfo projRoot = Directory.GetParent(customPath);
-			return $"{projRoot!.FullName}{BUNDLE_ROOT}/";
+			return Path.Combine(_bundleBuildInfo.OutputPath, BUNDLE_ROOT, "AssetFileInfo.txt");
 		}
 		
 		private bool CompareAndBuildRoutine(string bundleTargetPath, List<UnityEngine.Object> objectList)
@@ -529,14 +527,14 @@ namespace Causeless3t.AssetBundle.Editor
 
 		private Dictionary<string, List<ContentsInfo>> LoadBundleFileInfo()
 		{
-			if (File.Exists(GetBundleFileInfoPath() + "/AssetFileInfo.txt") == false) return new();
-			string contents = File.ReadAllText(GetBundleFileInfoPath() + "/AssetFileInfo.txt");
+			if (File.Exists(GetBundleFileInfoPath()) == false) return new();
+			string contents = File.ReadAllText(GetBundleFileInfoPath());
 			return DictionaryJson.FromJson<string, List<ContentsInfo>>(contents);
 		}
 
 		private void WriteToBundleFileInfo()
 		{
-			File.WriteAllText(GetBundleFileInfoPath() + "/AssetFileInfo.txt", DictionaryJson.ToJson(_bundleFileInfo));
+			File.WriteAllText(GetBundleFileInfoPath(), DictionaryJson.ToJson(_bundleFileInfo));
 		}
 
 		private List<ContentsInfo> GetFileInfoJson(string targetPath)
