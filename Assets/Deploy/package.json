@@ -1,0 +1,15 @@
+{
+  "name": "com.causeless3t.assetmanager",
+  "version": "1.0.0",
+  "displayName": "AssetManager",
+  "description": "어셋관리자",
+  "changelogUrl": "https://github.com/causeless8t/AssetManager.git/Assets/Deploy/CHANGELOG.md",
+  "unity": "2022.3",
+  "author": "causeless3t",
+  "keywords": [
+    "AssetBundle",
+    "AssetManager",
+    "Addressable"
+  ],
+  "gitDependencies": {}
+}
