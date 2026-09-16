@@ -21,6 +21,7 @@ namespace Causeless3t
 
         private readonly AssetBundleUpdater _updater = new();
         private readonly Dictionary<string, AssetBundleRef> _cachedBundles = new();
+        private readonly Dictionary<string, Task<AssetBundleRef>> _loadingBundles = new();
 
 #if UNITY_EDITOR
         private readonly Dictionary<string, UnityEngine.Object> _cachedLocalObjects = new();
@@ -68,15 +69,33 @@ namespace Causeless3t
         public async Task<AssetBundleRef> LoadCacheByPath(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
-            {
                 throw new ArgumentException("Bundle path cannot be empty.", nameof(path));
-            }
 
             if (_cachedBundles.TryGetValue(path, out var cachedBundle))
-            {
                 return cachedBundle;
-            }
 
+            if (_loadingBundles.TryGetValue(path, out var pendingLoad))
+                return await pendingLoad;
+
+            var loadingTask = LoadAndCacheBundleAsync(path);
+            _loadingBundles[path] = loadingTask;
+
+            try
+            {
+                return await loadingTask;
+            }
+            finally
+            {
+                if (_loadingBundles.TryGetValue(path, out var currentTask) &&
+                    ReferenceEquals(currentTask, loadingTask))
+                {
+                    _loadingBundles.Remove(path);
+                }
+            }
+        }
+
+        private async Task<AssetBundleRef> LoadAndCacheBundleAsync(string path)
+        {
             var fullPath = _updater.GetBundleLoadPath(path);
             var assetBundle = await LoadAssetBundleFromFileAsync(fullPath);
 
@@ -157,6 +176,25 @@ namespace Causeless3t
 
         public async Task UnloadAll(bool unloadBundles = false)
         {
+            var pendingLoads = _loadingBundles.Values.ToArray();
+
+            if (pendingLoads.Length > 0)
+            {
+                try
+                {
+                    await Task.WhenAll(pendingLoads);
+                }
+                catch
+                {
+                    // Individual load callers receive the original exception.
+                    // Cleanup must continue for bundles that loaded successfully.
+                }
+                finally
+                {
+                    _loadingBundles.Clear();
+                }
+            }
+
 #if UNITY_EDITOR
             _cachedLocalObjects.Clear();
 #endif
