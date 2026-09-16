@@ -17,6 +17,9 @@ namespace Causeless3t
             public UnityEngine.AssetBundle Bundle;
             public readonly Dictionary<string, UnityEngine.Object>
                 CachedDict = new();
+
+            internal readonly Dictionary<string, Task<UnityEngine.Object>>
+                LoadingTasks = new();
         }
 
         private readonly AssetBundleUpdater _updater = new();
@@ -111,57 +114,92 @@ namespace Causeless3t
             return result;
         }
 
-        public async Task<T> LoadAssetByPathAsync<T>(string bundlePath, string assetPath) where T : UnityEngine.Object
+        public async Task<T> LoadAssetByPathAsync<T>(string bundlePath, string assetPath)
+            where T : UnityEngine.Object
         {
+            if (string.IsNullOrWhiteSpace(assetPath))
+                throw new ArgumentException("Asset path cannot be empty.", nameof(assetPath));
+
+            var normalizedAssetPath = assetPath.Replace('\\', '/');
+
 #if UNITY_EDITOR
-            var bundleConvertedPath = Path.ChangeExtension(bundlePath.Replace('~', '/'), null);
-            var directoryPath = Path.Combine(Application.dataPath, bundleConvertedPath);
-            var directory = new DirectoryInfo(directoryPath);
+            var editorAssetPath = GetEditorAssetPath(bundlePath, normalizedAssetPath);
 
-            if (!directory.Exists)
-                return null;
-
-            var assetFile = directory
-                .GetFiles()
-                .FirstOrDefault(file => file.Name.Contains(assetPath));
-
-            if (assetFile == null)
-                return null;
-
-            var filePath = Path.Combine("Assets", bundleConvertedPath, assetFile.Name).Replace('\\', '/');
-
-            if (_cachedLocalObjects.TryGetValue(filePath, out var localObject))
-            {
+            if (_cachedLocalObjects.TryGetValue(editorAssetPath, out var localObject))
                 return localObject as T;
-            }
 
-            var loadedAsset = AssetDatabase.LoadAssetAtPath<T>(filePath);
-            _cachedLocalObjects[filePath] = loadedAsset;
+            var loadedAsset = AssetDatabase.LoadAssetAtPath<T>(editorAssetPath);
+
+            if (loadedAsset != null)
+                _cachedLocalObjects[editorAssetPath] = loadedAsset;
+
             return loadedAsset;
 #else
-            if (!_cachedBundles.TryGetValue(bundlePath,out var bundleReference))
-            {
-                bundleReference = await LoadCacheByPath(bundlePath);
-            }
+            var bundleReference = await LoadCacheByPath(bundlePath);
 
             if (bundleReference == null)
                 return null;
 
-            if (bundleReference.CachedDict.TryGetValue(assetPath,out var cachedAsset))
-            {
+            if (bundleReference.CachedDict.TryGetValue(normalizedAssetPath, out var cachedAsset))
                 return cachedAsset as T;
-            }
 
-            var loadedAsset = await LoadAssetFromBundleAsync(bundleReference.Bundle, assetPath, typeof(T));
+            if (bundleReference.LoadingTasks.TryGetValue(normalizedAssetPath, out var pendingLoad))
+                return (await pendingLoad) as T;
 
-            if (loadedAsset != null)
+            var loadingTask = LoadAndCacheAssetAsync(
+                bundleReference,
+                normalizedAssetPath,
+                typeof(T));
+            bundleReference.LoadingTasks[normalizedAssetPath] = loadingTask;
+
+            try
             {
-                bundleReference.CachedDict[assetPath] = loadedAsset;
+                return (await loadingTask) as T;
             }
-
-            return loadedAsset as T;
+            finally
+            {
+                if (bundleReference.LoadingTasks.TryGetValue(
+                        normalizedAssetPath,
+                        out var currentTask) &&
+                    ReferenceEquals(currentTask, loadingTask))
+                {
+                    bundleReference.LoadingTasks.Remove(normalizedAssetPath);
+                }
+            }
 #endif
         }
+
+#if UNITY_EDITOR
+        private static string GetEditorAssetPath(string bundlePath, string assetPath)
+        {
+            if (assetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                return assetPath;
+
+            var bundleDirectory = Path.ChangeExtension(
+                    bundlePath.Replace('\\', '/').Replace('~', '/'),
+                    null)
+                .Trim('/');
+
+            return Path.Combine("Assets", bundleDirectory, assetPath)
+                .Replace('\\', '/');
+        }
+#else
+        private static async Task<UnityEngine.Object> LoadAndCacheAssetAsync(
+            AssetBundleRef bundleReference,
+            string assetPath,
+            Type assetType)
+        {
+            var loadedAsset = await LoadAssetFromBundleAsync(
+                bundleReference.Bundle,
+                assetPath,
+                assetType);
+
+            if (loadedAsset != null)
+                bundleReference.CachedDict[assetPath] = loadedAsset;
+
+            return loadedAsset;
+        }
+#endif
 
         public async Task<GameObject> InstantiateGameObjectByPathAsync(
                 string bundlePath,
@@ -194,6 +232,26 @@ namespace Causeless3t
                     _loadingBundles.Clear();
                 }
             }
+
+            var pendingAssetLoads = _cachedBundles.Values
+                .SelectMany(reference => reference.LoadingTasks.Values)
+                .ToArray();
+
+            if (pendingAssetLoads.Length > 0)
+            {
+                try
+                {
+                    await Task.WhenAll(pendingAssetLoads);
+                }
+                catch
+                {
+                    // Individual load callers receive the original exception.
+                    // Cleanup must continue for assets that loaded successfully.
+                }
+            }
+
+            foreach (var reference in _cachedBundles.Values)
+                reference.LoadingTasks.Clear();
 
 #if UNITY_EDITOR
             _cachedLocalObjects.Clear();
