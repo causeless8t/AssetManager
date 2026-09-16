@@ -2,14 +2,13 @@
   "name": "com.causeless3t.assetmanager",
   "version": "1.0.0",
   "displayName": "AssetManager",
-  "description": "어셋관리자",
+  "description": "AssetBundle 빌드, 원격 패치, 캐시 및 에셋 로딩을 관리하는 Unity 패키지",
   "changelogUrl": "https://github.com/causeless8t/AssetManager.git/Assets/Deploy/CHANGELOG.md",
   "unity": "2022.3",
   "author": "causeless3t",
   "keywords": [
     "AssetBundle",
-    "AssetManager",
-    "Addressable"
+    "AssetManager"
   ],
   "gitDependencies": {}
 }
