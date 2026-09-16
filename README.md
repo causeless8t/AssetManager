@@ -1,10 +1,57 @@
 # AssetManager
-AssetBundle 빌드, 패치, 캐시 및 에셋 로딩 기능을 제공하는 Unity 패키지
-- Package 경로 : https://github.com/causeless8t/AssetManager.git?path=Assets/Deploy
 
-- 주의 사항
-1. (AssetBundle) 번들을 빌드하기 위한 윈도우에서 빌드할 폴더 목록, 플랫폼 별 버전, CDN 버전, 빌드될 경로를 저장해두고 빌드를 진행한다.
-2. (AssetBundle) 빌드된 파일명은 편의에 따라 {번들폴더 루트}~{하위경로}.unity3d 가 된다.
-3. (AssetBundle) 빌드된 파일과 함께 생성된 filesinfo.dat 파일을 함께 원격지에 업로드한다.
-4. (AssetBundle) CDN버전을 0으로 기록하면 통빌드이므로 추후 빌드 시 StreamingAssets 폴더에 옮기는 작업이 필요하다.
-5. (AssetBundle) 함께 기록하는 Label은 Label을 통해 번들을 로딩을 하고자 할때 사용되며, 기록하지 않을 시 파일명을 정확히 입력해야 로딩할 수 있다.
+AssetBundle 빌드, 원격 패치, CRC32 무결성 검증, 캐시 및 에셋 로딩을 제공하는 Unity Package Manager 패키지입니다.
+
+## 요구 사항
+
+- Unity 2022.3 이상
+- 외부 패키지 의존성 없음
+
+## 설치
+
+Unity Package Manager에서 **Add package from git URL...**을 선택하고 다음 주소를 입력합니다.
+
+```text
+https://github.com/causeless8t/AssetManager.git
+```
+
+특정 버전을 사용하려면 태그를 지정합니다.
+
+```text
+https://github.com/causeless8t/AssetManager.git#2.0.0
+```
+
+## 주요 구성
+
+- `ResourceManager`: 번들 및 에셋 로드, 캐시, 인스턴스 생성과 해제
+- `AssetBundleUpdater`: 매니페스트 비교, 변경 파일 다운로드와 검증
+- `AssetBundleBuilder`: 증분 AssetBundle 빌드와 매니페스트 생성
+- `BuildAssetBundles`: 빌드 설정을 편집하고 실행하는 EditorWindow
+
+`ResourceManager`는 일반 객체입니다. 애플리케이션에서는 하나의 인스턴스를 생성해 전역 수명으로 관리하는 방식을 권장합니다.
+
+## 빌드 창
+
+Unity Editor에서 다음 메뉴를 선택합니다.
+
+```text
+Tools > Build Asset Bundle
+```
+
+빌드 대상 폴더와 레이블, 플랫폼별 앱 버전·리비전, 출력 경로를 설정할 수 있습니다.
+
+## 저장소 구조
+
+```text
+AssetManager/
+├── Runtime/
+├── Editor/
+├── CHANGELOG.md
+├── LICENSE
+├── README.md
+└── package.json
+```
+
+## 라이선스
+
+이 프로젝트는 [MIT 라이선스](LICENSE)를 따릅니다.
