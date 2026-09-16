@@ -21,11 +21,9 @@ namespace Causeless3t
 
             public UnityEngine.AssetBundle Bundle { get; }
 
-            internal readonly Dictionary<string, UnityEngine.Object>
-                CachedAssets = new();
+            internal readonly Dictionary<string, UnityEngine.Object> CachedAssets = new();
 
-            internal readonly Dictionary<string, Task<UnityEngine.Object>>
-                LoadingAssets = new();
+            internal readonly Dictionary<string, Task<UnityEngine.Object>> LoadingAssets = new();
         }
 
         private readonly AssetBundleUpdater _updater = new();
@@ -182,17 +180,12 @@ namespace Causeless3t
             if (assetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
                 return assetPath;
 
-            var bundleDirectory = Path.ChangeExtension(
-                    bundlePath.Replace('\\', '/').Replace('~', '/'),
-                    null)
-                .Trim('/');
+            var bundleDirectory = Path.ChangeExtension(bundlePath.Replace('\\', '/').Replace('~', '/'), null).Trim('/');
 
-            return Path.Combine("Assets", bundleDirectory, assetPath)
-                .Replace('\\', '/');
+            return Path.Combine("Assets", bundleDirectory, assetPath).Replace('\\', '/');
         }
 #else
-        private static async Task<UnityEngine.Object> LoadAndCacheAssetAsync(
-            AssetBundleRef bundleReference,
+        private static async Task<UnityEngine.Object> LoadAndCacheAssetAsync(AssetBundleRef bundleReference,
             string assetPath,
             Type assetType)
         {
@@ -219,9 +212,7 @@ namespace Causeless3t
             return prefab == null ? null : UnityEngine.Object.Instantiate(prefab, parent, instantiateWorldSpace);
         }
 
-        public async Task<bool> UnloadBundleAsync(
-            string path,
-            bool unloadAllLoadedObjects = false)
+        public async Task<bool> UnloadBundleAsync(string path, bool unloadAllLoadedObjects = false)
         {
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("Bundle path cannot be empty.", nameof(path));
@@ -238,17 +229,14 @@ namespace Causeless3t
             }
             finally
             {
-                if (_unloadingBundles.TryGetValue(path, out var currentTask) &&
-                    ReferenceEquals(currentTask, unloadingTask))
+                if (_unloadingBundles.TryGetValue(path, out var currentTask) && ReferenceEquals(currentTask, unloadingTask))
                 {
                     _unloadingBundles.Remove(path);
                 }
             }
         }
 
-        private async Task<bool> UnloadBundleCoreAsync(
-            string path,
-            bool unloadAllLoadedObjects)
+        private async Task<bool> UnloadBundleCoreAsync(string path, bool unloadAllLoadedObjects)
         {
             if (_loadingBundles.TryGetValue(path, out var pendingLoad))
             {
