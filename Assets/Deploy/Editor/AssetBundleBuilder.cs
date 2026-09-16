@@ -98,13 +98,16 @@ namespace Causeless3t.AssetBundle.Editor
                 assetNames = assetPaths.ToArray()
             };
 
-            BuildPipeline.BuildAssetBundles(
+            var manifest = BuildPipeline.BuildAssetBundles(
                 bundleRoot,
                 new[] { build },
                 BuildAssetBundleOptions.DisableWriteTypeTree |
                 BuildAssetBundleOptions.UncompressedAssetBundle |
                 BuildAssetBundleOptions.ForceRebuildAssetBundle,
                 platform);
+
+            if (manifest == null)
+                throw new InvalidOperationException($"AssetBundle build failed: {targetPath}");
 
             NormalizeBuiltBundleName(bundleRoot, bundleFileName);
             Debug.Log($"Built {assetPaths.Count} assets into {Path.Combine(bundleRoot, bundleFileName)}");
@@ -249,6 +252,9 @@ namespace Causeless3t.AssetBundle.Editor
             var lowerCasePath = Path.Combine(bundleRoot, expectedFileName.ToLowerInvariant());
             if (File.Exists(lowerCasePath))
                 File.Move(lowerCasePath, expectedPath);
+
+            if (!File.Exists(expectedPath))
+                throw new FileNotFoundException("Built AssetBundle was not found.", expectedPath);
         }
 
         private static string NormalizeTargetPath(string path)
