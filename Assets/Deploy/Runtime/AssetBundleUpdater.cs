@@ -267,7 +267,7 @@ namespace Causeless3t
             {
                 if (remoteFiles.TryGetValue(pair.Key, out var remoteInfo))
                 {
-                    if (pair.Value.CompareTo(remoteInfo) != 0)
+                    if (!pair.Value.HasSameContent(remoteInfo))
                     {
                         result.FileInfos.Add(remoteInfo);
                     }
