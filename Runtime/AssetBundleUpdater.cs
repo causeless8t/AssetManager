@@ -185,7 +185,10 @@ namespace Causeless3t
                                  ?? throw new InvalidDataException("The remote contents manifest is invalid.");
 
             if (localInfoList.Revision == remoteInfoList.Revision)
+            {
+                onProgress?.Invoke(1f);
                 return;
+            }
 
             var modifiedInfoList = CompareFileInfoList(localInfoList, remoteInfoList);
             var removedPaths = modifiedInfoList.GetRemovableFiles();
@@ -193,14 +196,18 @@ namespace Causeless3t
             if (modifiedInfoList.FileInfos.Count == 0 && removedPaths.Count == 0)
             {
                 await ReplaceManifestAsync(remoteInfoList, cancellationToken);
+                onProgress?.Invoke(1f);
                 return;
             }
 
             var temporaryFiles = new List<(string TemporaryPath, string FinalPath)>();
             var temporaryLock = new object();
             var failureLock = new object();
+            var progressLock = new object();
             Exception firstFailure = null;
-            var completed = 0;
+            var downloadedBytes = 0L;
+            var totalDownloadBytes = modifiedInfoList.FileInfos.Sum(info =>
+                Math.Max(0L, info.Size));
 
             using var semaphore = new SemaphoreSlim(MaxConcurrentDownloads);
             using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(
@@ -216,6 +223,30 @@ namespace Causeless3t
                 {
                     var finalPath = GetBundleFilePath(info.Path);
                     temporaryPath = finalPath + ".download";
+                    var reportedBytes = 0L;
+
+                    void ReportDownloadedBytes(ulong value)
+                    {
+                        var expectedBytes = (ulong)Math.Max(0L, info.Size);
+                        var currentBytes = (long)Math.Min(value, expectedBytes);
+
+                        lock (progressLock)
+                        {
+                            if (currentBytes <= reportedBytes)
+                                return;
+
+                            downloadedBytes += currentBytes - reportedBytes;
+                            reportedBytes = currentBytes;
+
+                            if (totalDownloadBytes > 0)
+                            {
+                                var progress = Math.Min(
+                                    1d,
+                                    downloadedBytes / (double)totalDownloadBytes);
+                                onProgress?.Invoke((float)progress);
+                            }
+                        }
+                    }
 
                     var directory = Path.GetDirectoryName(finalPath);
                     if (!string.IsNullOrEmpty(directory))
@@ -226,9 +257,11 @@ namespace Causeless3t
 
                     var data = await DownloadBytesAsync(
                         CombineRemoteUrl(_remoteUrl, info.Path),
-                        batchToken);
+                        batchToken,
+                        ReportDownloadedBytes);
 
                     ValidateDownload(info, data);
+                    ReportDownloadedBytes((ulong)data.LongLength);
                     batchToken.ThrowIfCancellationRequested();
                     await File.WriteAllBytesAsync(temporaryPath, data);
                     batchToken.ThrowIfCancellationRequested();
@@ -238,8 +271,6 @@ namespace Causeless3t
                         temporaryFiles.Add((temporaryPath, finalPath));
                     }
 
-                    var finished = Interlocked.Increment(ref completed);
-                    onProgress?.Invoke(finished / (float)modifiedInfoList.FileInfos.Count);
                 }
                 catch (Exception exception)
                 {
@@ -286,6 +317,9 @@ namespace Causeless3t
                 // Bundle replacement and manifest replacement are one commit phase.
                 // Once it starts, finish it to avoid mixing new bundles with an old manifest.
                 await ReplaceManifestAsync(remoteInfoList, CancellationToken.None);
+
+                if (totalDownloadBytes <= 0)
+                    onProgress?.Invoke(1f);
             }
             catch
             {
@@ -372,29 +406,42 @@ namespace Causeless3t
 
         private static async Task<byte[]> DownloadBytesAsync(
             string url,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Action<ulong> onDownloadedBytes)
         {
             using var request = UnityWebRequest.Get(url);
             request.downloadHandler = new DownloadHandlerBuffer();
             ConfigureRequest(request);
 
-            await SendRequestAsync(request, cancellationToken);
+            await SendRequestAsync(
+                request,
+                cancellationToken,
+                onDownloadedBytes);
 
             return request.downloadHandler.data;
         }
 
         private static async Task SendRequestAsync(
             UnityWebRequest request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Action<ulong> onDownloadedBytes = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             using (cancellationToken.Register(request.Abort))
             {
-                await AwaitAsyncOperation(request.SendWebRequest());
+                var operation = request.SendWebRequest();
+
+                while (!operation.isDone)
+                {
+                    onDownloadedBytes?.Invoke(request.downloadedBytes);
+                    await Task.Yield();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            onDownloadedBytes?.Invoke(request.downloadedBytes);
             ThrowIfRequestFailed(request);
         }
 
@@ -472,16 +519,5 @@ namespace Causeless3t
             }
         }
 
-        private static Task AwaitAsyncOperation(AsyncOperation operation)
-        {
-            if (operation.isDone)
-                return Task.CompletedTask;
-
-            var completion = new TaskCompletionSource<bool>();
-
-            operation.completed += _ => completion.TrySetResult(true);
-
-            return completion.Task;
-        }
     }
 }

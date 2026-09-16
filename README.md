@@ -18,7 +18,7 @@ https://github.com/causeless8t/AssetManager.git
 특정 버전을 사용하려면 태그를 지정합니다.
 
 ```text
-https://github.com/causeless8t/AssetManager.git#2.2.0
+https://github.com/causeless8t/AssetManager.git#2.2.1
 ```
 
 ## 주요 구성
@@ -52,6 +52,7 @@ await resourceManager.CheckUpdateAsync(
 사용자가 취소하면 `OperationCanceledException`, 네트워크 요청이 실패하면
 `IOException`, 파일 크기나 CRC가 일치하지 않으면 `InvalidDataException`이 발생합니다.
 파일 교체가 시작된 이후에는 번들과 매니페스트의 일관성을 위해 교체 작업을 완료합니다.
+진행률은 각 병렬 요청의 실제 수신 바이트를 합산하여 전체 다운로드 바이트를 기준으로 계산됩니다.
 
 ## 빌드 창
 
