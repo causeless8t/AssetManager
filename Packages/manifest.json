@@ -1,6 +1,5 @@
 {
   "dependencies": {
-    "com.causeless3t.unitycore": "https://github.com/causeless8t/UnityCore.git?path=Assets/Deploy",
     "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
     "com.unity.collab-proxy": "2.6.0",
     "com.unity.feature.2d": "2.0.1",
