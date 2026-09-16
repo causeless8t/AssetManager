@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
-using Causeless3t.Core;
 using UnityEngine;
 using Cysharp.Threading.Tasks;
 using Causeless3t.Security;
@@ -15,7 +14,7 @@ using UnityEditor;
 
 namespace Causeless3t
 { 
-    public sealed class ResourceManager : Singleton<ResourceManager>
+    public sealed class ResourceManager
     {
         private static readonly string BundleRootPath = Path.Combine(Application.persistentDataPath, "contents");
         
@@ -217,7 +216,7 @@ namespace Causeless3t
         }
 
         private bool IsExistsPersistentPath(string path) => File.Exists(Path.Combine(BundleRootPath, path));
-        public static string GetPathByLabel(string label) => Instance._contentsInfoList.FileInfos.FirstOrDefault(info => info.Label == label)?.Path;
+        public string GetPathByLabel(string label) => _contentsInfoList?.FileInfos.FirstOrDefault(info => info.Label == label)?.Path;
 
         public async UniTask LoadCacheByLabels(IEnumerable<string> labels)
         {
