@@ -18,7 +18,7 @@ https://github.com/causeless8t/AssetManager.git
 특정 버전을 사용하려면 태그를 지정합니다.
 
 ```text
-https://github.com/causeless8t/AssetManager.git#2.3.0
+https://github.com/causeless8t/AssetManager.git#2.3.1
 ```
 
 ## 주요 구성
@@ -85,6 +85,7 @@ AssetManager/
 ├── Editor/
 ├── Samples~/
 ├── CHANGELOG.md
+├── CLAUDE.md
 ├── LICENSE
 ├── README.md
 └── package.json
