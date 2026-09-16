@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Networking;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -107,8 +108,21 @@ namespace Causeless3t
 
         private async Task<AssetBundleRef> LoadAndCacheBundleAsync(string path)
         {
-            var fullPath = _updater.GetBundleLoadPath(path);
-            var assetBundle = await LoadAssetBundleFromFileAsync(fullPath);
+            UnityEngine.AssetBundle assetBundle;
+
+            if (_updater.TryGetPersistentBundlePath(path, out var persistentPath))
+            {
+                assetBundle = await LoadAssetBundleFromFileAsync(persistentPath);
+            }
+            else
+            {
+                var streamingPath = _updater.GetStreamingBundlePath(path);
+#if (UNITY_ANDROID || UNITY_WEBGL) && !UNITY_EDITOR
+                assetBundle = await LoadAssetBundleFromUrlAsync(streamingPath);
+#else
+                assetBundle = await LoadAssetBundleFromFileAsync(streamingPath);
+#endif
+            }
 
             if (assetBundle == null)
                 return null;
@@ -348,6 +362,22 @@ namespace Causeless3t
 
             await AwaitAsyncOperation(request);
             return request.assetBundle;
+        }
+
+        private static async Task<UnityEngine.AssetBundle> LoadAssetBundleFromUrlAsync(string url)
+        {
+            using var request = UnityWebRequestAssetBundle.GetAssetBundle(url);
+
+            await AwaitAsyncOperation(request.SendWebRequest());
+
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                throw new IOException(
+                    $"AssetBundle request failed ({request.responseCode}): " +
+                    request.error);
+            }
+
+            return DownloadHandlerAssetBundle.GetContent(request);
         }
 
         private static async Task<UnityEngine.Object> LoadAssetFromBundleAsync(UnityEngine.AssetBundle bundle,

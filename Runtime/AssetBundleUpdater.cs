@@ -117,16 +117,22 @@ namespace Causeless3t
             return _contentsInfoList?.FileInfos.FirstOrDefault(info => info.Label == label)?.Path;
         }
 
-        internal string GetBundleLoadPath(string relativePath)
+        internal bool TryGetPersistentBundlePath(
+            string relativePath,
+            out string path)
         {
             var normalizedPath = NormalizeRelativePath(relativePath);
-            var persistentPath = Path.Combine(BundleRootPath, normalizedPath);
+            path = Path.Combine(BundleRootPath, normalizedPath);
 
-            return File.Exists(persistentPath)
-                ? persistentPath
-                : Path.Combine(Application.streamingAssetsPath,
-                    "contents",
-                    normalizedPath);
+            return File.Exists(path);
+        }
+
+        internal string GetStreamingBundlePath(string relativePath)
+        {
+            var normalizedPath = NormalizeRelativePath(relativePath);
+
+            return $"{Application.streamingAssetsPath.TrimEnd('/')}/" +
+                   $"contents/{normalizedPath}";
         }
 
         private static void ClearBundleFiles()

@@ -5,6 +5,13 @@
 문서 형식은 [변경 이력 유지하기](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 버전은 [유의적 버전](https://semver.org/lang/ko/) 규칙을 따릅니다.
 
+## [2.0.1] - 2026-09-16
+
+### 수정
+
+- Android StreamingAssets의 AssetBundle을 파일 API가 아닌
+  `UnityWebRequestAssetBundle`로 읽도록 수정했습니다.
+
 ## [2.0.0] - 2026-09-16
 
 ### 변경

@@ -18,7 +18,7 @@ https://github.com/causeless8t/AssetManager.git
 특정 버전을 사용하려면 태그를 지정합니다.
 
 ```text
-https://github.com/causeless8t/AssetManager.git#2.0.0
+https://github.com/causeless8t/AssetManager.git#2.0.1
 ```
 
 ## 주요 구성
@@ -29,6 +29,10 @@ https://github.com/causeless8t/AssetManager.git#2.0.0
 - `BuildAssetBundles`: 빌드 설정을 편집하고 실행하는 EditorWindow
 
 `ResourceManager`는 일반 객체입니다. 애플리케이션에서는 하나의 인스턴스를 생성해 전역 수명으로 관리하는 방식을 권장합니다.
+
+Android에서는 APK 또는 AAB 내부의 StreamingAssets 번들을
+`UnityWebRequestAssetBundle`로 읽습니다. 패치로 내려받아
+`Application.persistentDataPath`에 저장된 번들은 파일에서 직접 로드합니다.
 
 ## 빌드 창
 
