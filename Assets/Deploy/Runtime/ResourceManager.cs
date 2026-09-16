@@ -14,17 +14,24 @@ namespace Causeless3t
     {
         public sealed class AssetBundleRef
         {
-            public UnityEngine.AssetBundle Bundle;
-            public readonly Dictionary<string, UnityEngine.Object>
-                CachedDict = new();
+            internal AssetBundleRef(UnityEngine.AssetBundle bundle)
+            {
+                Bundle = bundle;
+            }
+
+            public UnityEngine.AssetBundle Bundle { get; }
+
+            internal readonly Dictionary<string, UnityEngine.Object>
+                CachedAssets = new();
 
             internal readonly Dictionary<string, Task<UnityEngine.Object>>
-                LoadingTasks = new();
+                LoadingAssets = new();
         }
 
         private readonly AssetBundleUpdater _updater = new();
         private readonly Dictionary<string, AssetBundleRef> _cachedBundles = new();
         private readonly Dictionary<string, Task<AssetBundleRef>> _loadingBundles = new();
+        private readonly Dictionary<string, Task<bool>> _unloadingBundles = new();
 
 #if UNITY_EDITOR
         private readonly Dictionary<string, UnityEngine.Object> _cachedLocalObjects = new();
@@ -74,6 +81,9 @@ namespace Causeless3t
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("Bundle path cannot be empty.", nameof(path));
 
+            if (_unloadingBundles.TryGetValue(path, out var pendingUnload))
+                await pendingUnload;
+
             if (_cachedBundles.TryGetValue(path, out var cachedBundle))
                 return cachedBundle;
 
@@ -105,10 +115,7 @@ namespace Causeless3t
             if (assetBundle == null)
                 return null;
 
-            var result = new AssetBundleRef
-            {
-                Bundle = assetBundle
-            };
+            var result = new AssetBundleRef(assetBundle);
 
             _cachedBundles[path] = result;
             return result;
@@ -140,17 +147,17 @@ namespace Causeless3t
             if (bundleReference == null)
                 return null;
 
-            if (bundleReference.CachedDict.TryGetValue(normalizedAssetPath, out var cachedAsset))
+            if (bundleReference.CachedAssets.TryGetValue(normalizedAssetPath, out var cachedAsset))
                 return cachedAsset as T;
 
-            if (bundleReference.LoadingTasks.TryGetValue(normalizedAssetPath, out var pendingLoad))
+            if (bundleReference.LoadingAssets.TryGetValue(normalizedAssetPath, out var pendingLoad))
                 return (await pendingLoad) as T;
 
             var loadingTask = LoadAndCacheAssetAsync(
                 bundleReference,
                 normalizedAssetPath,
                 typeof(T));
-            bundleReference.LoadingTasks[normalizedAssetPath] = loadingTask;
+            bundleReference.LoadingAssets[normalizedAssetPath] = loadingTask;
 
             try
             {
@@ -158,12 +165,12 @@ namespace Causeless3t
             }
             finally
             {
-                if (bundleReference.LoadingTasks.TryGetValue(
+                if (bundleReference.LoadingAssets.TryGetValue(
                         normalizedAssetPath,
                         out var currentTask) &&
                     ReferenceEquals(currentTask, loadingTask))
                 {
-                    bundleReference.LoadingTasks.Remove(normalizedAssetPath);
+                    bundleReference.LoadingAssets.Remove(normalizedAssetPath);
                 }
             }
 #endif
@@ -195,7 +202,7 @@ namespace Causeless3t
                 assetType);
 
             if (loadedAsset != null)
-                bundleReference.CachedDict[assetPath] = loadedAsset;
+                bundleReference.CachedAssets[assetPath] = loadedAsset;
 
             return loadedAsset;
         }
@@ -212,8 +219,85 @@ namespace Causeless3t
             return prefab == null ? null : UnityEngine.Object.Instantiate(prefab, parent, instantiateWorldSpace);
         }
 
+        public async Task<bool> UnloadBundleAsync(
+            string path,
+            bool unloadAllLoadedObjects = false)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("Bundle path cannot be empty.", nameof(path));
+
+            if (_unloadingBundles.TryGetValue(path, out var pendingUnload))
+                return await pendingUnload;
+
+            var unloadingTask = UnloadBundleCoreAsync(path, unloadAllLoadedObjects);
+            _unloadingBundles[path] = unloadingTask;
+
+            try
+            {
+                return await unloadingTask;
+            }
+            finally
+            {
+                if (_unloadingBundles.TryGetValue(path, out var currentTask) &&
+                    ReferenceEquals(currentTask, unloadingTask))
+                {
+                    _unloadingBundles.Remove(path);
+                }
+            }
+        }
+
+        private async Task<bool> UnloadBundleCoreAsync(
+            string path,
+            bool unloadAllLoadedObjects)
+        {
+            if (_loadingBundles.TryGetValue(path, out var pendingLoad))
+            {
+                try
+                {
+                    await pendingLoad;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            if (!_cachedBundles.TryGetValue(path, out var bundleReference))
+                return false;
+
+            var pendingAssetLoads = bundleReference.LoadingAssets.Values.ToArray();
+
+            if (pendingAssetLoads.Length > 0)
+            {
+                try
+                {
+                    await Task.WhenAll(pendingAssetLoads);
+                }
+                catch
+                {
+                    // The original asset load caller receives the exception.
+                }
+            }
+
+            bundleReference.LoadingAssets.Clear();
+            bundleReference.CachedAssets.Clear();
+            _cachedBundles.Remove(path);
+
+            if (bundleReference.Bundle != null)
+            {
+                await AwaitAsyncOperation(
+                    bundleReference.Bundle.UnloadAsync(unloadAllLoadedObjects));
+            }
+
+            return true;
+        }
+
         public async Task UnloadAll(bool unloadBundles = false)
         {
+            var pendingUnloads = _unloadingBundles.Values.ToArray();
+            if (pendingUnloads.Length > 0)
+                await Task.WhenAll(pendingUnloads);
+
             var pendingLoads = _loadingBundles.Values.ToArray();
 
             if (pendingLoads.Length > 0)
@@ -234,7 +318,7 @@ namespace Causeless3t
             }
 
             var pendingAssetLoads = _cachedBundles.Values
-                .SelectMany(reference => reference.LoadingTasks.Values)
+                .SelectMany(reference => reference.LoadingAssets.Values)
                 .ToArray();
 
             if (pendingAssetLoads.Length > 0)
@@ -250,24 +334,24 @@ namespace Causeless3t
                 }
             }
 
-            foreach (var reference in _cachedBundles.Values)
-                reference.LoadingTasks.Clear();
-
 #if UNITY_EDITOR
             _cachedLocalObjects.Clear();
 #endif
-            foreach (var pair in _cachedBundles)
-                pair.Value.CachedDict.Clear();
 
             if (!unloadBundles)
+            {
+                foreach (var reference in _cachedBundles.Values)
+                {
+                    reference.LoadingAssets.Clear();
+                    reference.CachedAssets.Clear();
+                }
+
                 return;
+            }
 
-            var unloadTasks = _cachedBundles.Values
-                .Where(reference => reference.Bundle != null)
-                .Select(reference => AwaitAsyncOperation(reference.Bundle.UnloadAsync(true)));
-
-            await Task.WhenAll(unloadTasks);
-            _cachedBundles.Clear();
+            var bundlePaths = _cachedBundles.Keys.ToArray();
+            await Task.WhenAll(
+                bundlePaths.Select(path => UnloadBundleAsync(path, true)));
         }
 
         private static async Task<UnityEngine.AssetBundle> LoadAssetBundleFromFileAsync(string path)
