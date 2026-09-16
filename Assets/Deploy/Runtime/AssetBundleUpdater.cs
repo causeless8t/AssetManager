@@ -16,31 +16,23 @@ namespace Causeless3t
         private const int MaxConcurrentDownloads = 5;
         private const int RequestTimeoutSeconds = 15;
 
-        private static readonly string BundleRootPath =
-            Path.Combine(Application.persistentDataPath, "contents");
+        private static readonly string BundleRootPath = Path.Combine(Application.persistentDataPath, "contents");
 
 #if UNITY_EDITOR
-        private static readonly string StreamingInfoFilePath =
-            Path.Combine(
+        private static readonly string StreamingInfoFilePath = Path.Combine(
                 Application.streamingAssetsPath,
                 "contents",
                 AssetBundleUtil.INFO_FILE_NAME);
 #elif UNITY_ANDROID
-        private static readonly string StreamingInfoFilePath =
-            $"jar:file://{Application.dataPath}!/assets/contents/{AssetBundleUtil.INFO_FILE_NAME}";
+        private static readonly string StreamingInfoFilePath = $"jar:file://{Application.dataPath}!/assets/contents/{AssetBundleUtil.INFO_FILE_NAME}";
 #else
-        private static readonly string StreamingInfoFilePath =
-            Path.Combine(
-                Application.dataPath,
+        private static readonly string StreamingInfoFilePath = Path.Combine(Application.dataPath,
                 "Raw",
                 "contents",
                 AssetBundleUtil.INFO_FILE_NAME);
 #endif
 
-        private static readonly string PersistentInfoFilePath =
-            Path.Combine(
-                BundleRootPath,
-                AssetBundleUtil.INFO_FILE_NAME);
+        private static readonly string PersistentInfoFilePath = Path.Combine(BundleRootPath, AssetBundleUtil.INFO_FILE_NAME);
 
         private ContentsInfoList _contentsInfoList;
         private string _remoteUrl;
@@ -61,62 +53,46 @@ namespace Causeless3t
 #if UNITY_EDITOR
             if (File.Exists(StreamingInfoFilePath))
             {
-                var editorInfoText =
-                    await File.ReadAllTextAsync(StreamingInfoFilePath);
-                _contentsInfoList =
-                    JsonUtility.FromJson<ContentsInfoList>(
-                        editorInfoText);
+                var editorInfoText = await File.ReadAllTextAsync(StreamingInfoFilePath);
+                _contentsInfoList = JsonUtility.FromJson<ContentsInfoList>(editorInfoText);
             }
 #else
             var infoFileText = await ReadStreamingInfoAsync();
-            var streamingInfoList =
-                JsonUtility.FromJson<ContentsInfoList>(
-                    infoFileText);
+            var streamingInfoList = JsonUtility.FromJson<ContentsInfoList>(infoFileText);
 
             if (streamingInfoList == null)
             {
-                throw new InvalidDataException(
-                    "StreamingAssets contents manifest is invalid.");
+                throw new InvalidDataException("StreamingAssets contents manifest is invalid.");
             }
 
-            if (!Application.version.Equals(
-                    streamingInfoList.AppVersion))
+            if (!Application.version.Equals(streamingInfoList.AppVersion))
             {
                 ClearBundleFiles();
             }
 
             if (!File.Exists(PersistentInfoFilePath))
             {
-                await File.WriteAllTextAsync(
-                    PersistentInfoFilePath,
-                    infoFileText);
+                await File.WriteAllTextAsync(PersistentInfoFilePath,infoFileText);
             }
 
-            var persistentInfoText =
-                await File.ReadAllTextAsync(
-                    PersistentInfoFilePath);
-            _contentsInfoList =
-                JsonUtility.FromJson<ContentsInfoList>(
-                    persistentInfoText);
+            var persistentInfoText = await File.ReadAllTextAsync(PersistentInfoFilePath);
+            _contentsInfoList = JsonUtility.FromJson<ContentsInfoList>(persistentInfoText);
 #endif
 
             IsInitialized = true;
         }
 
-        internal async Task CheckUpdateAsync(
-            Action<float> onProgress = null)
+        internal async Task CheckUpdateAsync(Action<float> onProgress = null)
         {
             if (!IsInitialized)
             {
-                throw new InvalidOperationException(
-                    "ResourceManager must be initialized " +
-                    "before checking for updates.");
+                throw new InvalidOperationException("ResourceManager must be initialized " +
+                                                    "before checking for updates.");
             }
 
             if (IsDownloading)
             {
-                throw new InvalidOperationException(
-                    "An asset update is already in progress.");
+                throw new InvalidOperationException("An asset update is already in progress.");
             }
 
             IsDownloading = true;
@@ -126,12 +102,8 @@ namespace Causeless3t
 #if !UNITY_EDITOR
                 await DownloadUpdatableFiles(onProgress);
 
-                var infoFileText =
-                    await File.ReadAllTextAsync(
-                        PersistentInfoFilePath);
-                _contentsInfoList =
-                    JsonUtility.FromJson<ContentsInfoList>(
-                        infoFileText);
+                var infoFileText = await File.ReadAllTextAsync(PersistentInfoFilePath);
+                _contentsInfoList = JsonUtility.FromJson<ContentsInfoList>(infoFileText);
 #endif
             }
             finally
@@ -142,23 +114,17 @@ namespace Causeless3t
 
         internal string GetPathByLabel(string label)
         {
-            return _contentsInfoList?
-                .FileInfos
-                .FirstOrDefault(info => info.Label == label)?
-                .Path;
+            return _contentsInfoList?.FileInfos.FirstOrDefault(info => info.Label == label)?.Path;
         }
 
         internal string GetBundleLoadPath(string relativePath)
         {
-            var normalizedPath =
-                NormalizeRelativePath(relativePath);
-            var persistentPath =
-                Path.Combine(BundleRootPath, normalizedPath);
+            var normalizedPath = NormalizeRelativePath(relativePath);
+            var persistentPath = Path.Combine(BundleRootPath, normalizedPath);
 
             return File.Exists(persistentPath)
                 ? persistentPath
-                : Path.Combine(
-                    Application.streamingAssetsPath,
+                : Path.Combine(Application.streamingAssetsPath,
                     "contents",
                     normalizedPath);
         }
@@ -168,144 +134,91 @@ namespace Causeless3t
             if (!Directory.Exists(BundleRootPath))
                 return;
 
-            foreach (var file in Directory.GetFiles(
-                         BundleRootPath,
-                         "*",
-                         SearchOption.AllDirectories))
+            foreach (var file in Directory.GetFiles(BundleRootPath, "*", SearchOption.AllDirectories))
             {
                 File.Delete(file);
             }
         }
 
-        private async Task DownloadUpdatableFiles(
-            Action<float> onProgress)
+        private async Task DownloadUpdatableFiles(Action<float> onProgress)
         {
             if (string.IsNullOrWhiteSpace(_remoteUrl))
             {
-                throw new InvalidOperationException(
-                    "Remote URL must be configured before " +
-                    "checking for updates.");
+                throw new InvalidOperationException("Remote URL must be configured before " +
+                                                    "checking for updates.");
             }
 
-            var localInfoText =
-                await File.ReadAllTextAsync(
-                    PersistentInfoFilePath);
-            var localInfoList =
-                JsonUtility.FromJson<ContentsInfoList>(
-                    localInfoText)
-                ?? throw new InvalidDataException(
-                    "The local contents manifest is invalid.");
+            var localInfoText = await File.ReadAllTextAsync(PersistentInfoFilePath);
+            var localInfoList = JsonUtility.FromJson<ContentsInfoList>(localInfoText)
+                                ?? throw new InvalidDataException("The local contents manifest is invalid.");
 
-            var remoteInfoText = await DownloadTextAsync(
-                CombineRemoteUrl(
-                    _remoteUrl,
-                    AssetBundleUtil.INFO_FILE_NAME));
-            var remoteInfoList =
-                JsonUtility.FromJson<ContentsInfoList>(
-                    remoteInfoText)
-                ?? throw new InvalidDataException(
-                    "The remote contents manifest is invalid.");
+            var remoteInfoText = await DownloadTextAsync(CombineRemoteUrl(_remoteUrl, AssetBundleUtil.INFO_FILE_NAME));
+            var remoteInfoList = JsonUtility.FromJson<ContentsInfoList>(remoteInfoText) 
+                                 ?? throw new InvalidDataException("The remote contents manifest is invalid.");
 
-            if (localInfoList.Revision ==
-                remoteInfoList.Revision)
+            if (localInfoList.Revision == remoteInfoList.Revision)
             {
                 return;
             }
 
-            var modifiedInfoList = CompareFileInfoList(
-                localInfoList,
-                remoteInfoList);
-            var removedPaths =
-                modifiedInfoList.GetRemovableFiles();
+            var modifiedInfoList = CompareFileInfoList(localInfoList, remoteInfoList);
+            var removedPaths = modifiedInfoList.GetRemovableFiles();
 
-            if (modifiedInfoList.FileInfos.Count == 0 &&
-                removedPaths.Count == 0)
+            if (modifiedInfoList.FileInfos.Count == 0 && removedPaths.Count == 0)
             {
                 await ReplaceManifestAsync(remoteInfoList);
                 return;
             }
 
-            var downloadSize =
-                modifiedInfoList.FileInfos.Sum(
-                    info => info.Size);
-            Debug.Log(
-                $"Found CDN Downloadable Files " +
-                $"{modifiedInfoList.FileInfos.Count}, " +
-                $"Size {downloadSize / (1024 * 1024)}MB");
+            var downloadSize = modifiedInfoList.FileInfos.Sum(info => info.Size);
+            Debug.Log("Found CDN Downloadable Files " +
+                      $"{modifiedInfoList.FileInfos.Count}, " +
+                      $"Size {downloadSize / (1024 * 1024)}MB");
 
-            var temporaryFiles =
-                new List<(string TemporaryPath,
-                    string FinalPath)>();
+            var temporaryFiles = new List<(string TemporaryPath, string FinalPath)>();
             var temporaryLock = new object();
             var completed = 0;
 
-            using var semaphore =
-                new SemaphoreSlim(
-                    MaxConcurrentDownloads);
+            using var semaphore = new SemaphoreSlim(MaxConcurrentDownloads);
 
-            var tasks =
-                modifiedInfoList.FileInfos
-                    .Select(async info =>
+            var tasks = modifiedInfoList.FileInfos.Select(async info =>
                     {
                         await semaphore.WaitAsync();
 
                         try
                         {
-                            var finalPath =
-                                GetBundleFilePath(
-                                    info.Path);
-                            var temporaryPath =
-                                finalPath + ".download";
+                            var finalPath = GetBundleFilePath(info.Path);
+                            var temporaryPath = finalPath + ".download";
 
-                            var directory =
-                                Path.GetDirectoryName(
-                                    finalPath);
-                            if (!string.IsNullOrEmpty(
-                                    directory))
+                            var directory = Path.GetDirectoryName(finalPath);
+                            if (!string.IsNullOrEmpty(directory))
                             {
-                                Directory.CreateDirectory(
-                                    directory);
+                                Directory.CreateDirectory(directory);
                             }
 
-                            if (File.Exists(
-                                    temporaryPath))
+                            if (File.Exists(temporaryPath))
                             {
-                                File.Delete(
-                                    temporaryPath);
+                                File.Delete(temporaryPath);
                             }
 
-                            var data =
-                                await DownloadBytesAsync(
-                                    CombineRemoteUrl(
-                                        _remoteUrl,
-                                        info.Path));
+                            var data = await DownloadBytesAsync(CombineRemoteUrl(_remoteUrl, info.Path));
 
                             ValidateDownload(info, data);
-                            await File.WriteAllBytesAsync(
-                                temporaryPath,
-                                data);
+                            await File.WriteAllBytesAsync(temporaryPath, data);
 
                             lock (temporaryLock)
                             {
-                                temporaryFiles.Add(
-                                    (temporaryPath,
-                                        finalPath));
+                                temporaryFiles.Add((temporaryPath, finalPath));
                             }
 
-                            var finished =
-                                Interlocked.Increment(
-                                    ref completed);
-                            onProgress?.Invoke(
-                                finished /
-                                (float)modifiedInfoList
-                                    .FileInfos.Count);
+                            var finished = Interlocked.Increment(ref completed);
+                            onProgress?.Invoke(finished / (float)modifiedInfoList.FileInfos.Count);
                         }
                         finally
                         {
                             semaphore.Release();
                         }
-                    })
-                    .ToList();
+                    }).ToList();
 
             try
             {
@@ -316,32 +229,25 @@ namespace Causeless3t
                     if (File.Exists(file.FinalPath))
                         File.Delete(file.FinalPath);
 
-                    File.Move(
-                        file.TemporaryPath,
-                        file.FinalPath);
+                    File.Move(file.TemporaryPath, file.FinalPath);
                 }
 
                 foreach (var removedPath in removedPaths)
                 {
-                    var filePath =
-                        GetBundleFilePath(
-                            removedPath);
+                    var filePath = GetBundleFilePath(removedPath);
                     if (File.Exists(filePath))
                         File.Delete(filePath);
                 }
 
-                await ReplaceManifestAsync(
-                    remoteInfoList);
+                await ReplaceManifestAsync(remoteInfoList);
             }
             catch
             {
                 foreach (var file in temporaryFiles)
                 {
-                    if (File.Exists(
-                            file.TemporaryPath))
+                    if (File.Exists(file.TemporaryPath))
                     {
-                        File.Delete(
-                            file.TemporaryPath);
+                        File.Delete(file.TemporaryPath);
                     }
                 }
 
@@ -349,38 +255,26 @@ namespace Causeless3t
             }
         }
 
-        private static ContentsInfoList
-            CompareFileInfoList(
-                ContentsInfoList localList,
-                ContentsInfoList remoteList)
+        private static ContentsInfoList CompareFileInfoList(ContentsInfoList localList, ContentsInfoList remoteList)
         {
             var result = new ContentsInfoList();
-            var localFiles =
-                localList.FileInfos.ToDictionary(
-                    item => item.Path,
-                    item => item);
-            var remoteFiles =
-                remoteList.FileInfos.ToDictionary(
-                    item => item.Path,
-                    item => item);
+            var localFiles = localList.FileInfos.ToDictionary(item => item.Path,
+                item => item);
+            var remoteFiles = remoteList.FileInfos.ToDictionary(item => item.Path,
+                item => item);
 
             foreach (var pair in localFiles)
             {
-                if (remoteFiles.TryGetValue(
-                        pair.Key,
-                        out var remoteInfo))
+                if (remoteFiles.TryGetValue(pair.Key, out var remoteInfo))
                 {
-                    if (pair.Value.CompareTo(
-                            remoteInfo) != 0)
+                    if (pair.Value.CompareTo(remoteInfo) != 0)
                     {
-                        result.FileInfos.Add(
-                            remoteInfo);
+                        result.FileInfos.Add(remoteInfo);
                     }
                 }
                 else
                 {
-                    result.AddRemovableFile(
-                        pair.Value);
+                    result.AddRemovableFile(pair.Value);
                 }
             }
 
@@ -393,160 +287,116 @@ namespace Causeless3t
             return result;
         }
 
-        private static void ValidateDownload(
-            ContentsInfo info,
-            byte[] data)
+        private static void ValidateDownload(ContentsInfo info, byte[] data)
         {
             var hash = CRC32.Compute(data).ToString();
 
-            if (info.Size != data.LongLength ||
-                !string.Equals(
-                    info.Hash,
-                    hash,
-                    StringComparison.Ordinal))
+            if (info.Size != data.LongLength || !string.Equals(info.Hash, hash, StringComparison.Ordinal))
             {
-                throw new InvalidDataException(
-                    $"Downloaded bundle validation " +
-                    $"failed: {info.Path}");
+                throw new InvalidDataException("Downloaded bundle validation " +
+                                               $"failed: {info.Path}");
             }
         }
 
-        private static async Task<string>
-            ReadStreamingInfoAsync()
+        private static async Task<string> ReadStreamingInfoAsync()
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
-            return await DownloadTextAsync(
-                StreamingInfoFilePath);
+            return await DownloadTextAsync(StreamingInfoFilePath);
 #else
-            return await File.ReadAllTextAsync(
-                StreamingInfoFilePath);
+            return await File.ReadAllTextAsync(StreamingInfoFilePath);
 #endif
         }
 
-        private static async Task<string>
-            DownloadTextAsync(string url)
+        private static async Task<string> DownloadTextAsync(string url)
         {
-            using var request =
-                UnityWebRequest.Get(url);
-            request.downloadHandler =
-                new DownloadHandlerBuffer();
+            using var request = UnityWebRequest.Get(url);
+            request.downloadHandler = new DownloadHandlerBuffer();
             ConfigureRequest(request);
 
-            await AwaitAsyncOperation(
-                request.SendWebRequest());
+            await AwaitAsyncOperation(request.SendWebRequest());
             ThrowIfRequestFailed(request);
 
             return request.downloadHandler.text;
         }
 
-        private static async Task<byte[]>
-            DownloadBytesAsync(string url)
+        private static async Task<byte[]> DownloadBytesAsync(string url)
         {
-            using var request =
-                UnityWebRequest.Get(url);
-            request.downloadHandler =
-                new DownloadHandlerBuffer();
+            using var request = UnityWebRequest.Get(url);
+            request.downloadHandler = new DownloadHandlerBuffer();
             ConfigureRequest(request);
 
-            await AwaitAsyncOperation(
-                request.SendWebRequest());
+            await AwaitAsyncOperation(request.SendWebRequest());
             ThrowIfRequestFailed(request);
 
             return request.downloadHandler.data;
         }
 
-        private static void ConfigureRequest(
-            UnityWebRequest request)
+        private static void ConfigureRequest(UnityWebRequest request)
         {
             request.useHttpContinue = false;
             request.timeout = RequestTimeoutSeconds;
         }
 
-        private static async Task ReplaceManifestAsync(
-            ContentsInfoList manifest)
+        private static async Task ReplaceManifestAsync(ContentsInfoList manifest)
         {
             Directory.CreateDirectory(BundleRootPath);
 
-            var temporaryPath =
-                PersistentInfoFilePath + ".download";
-            await File.WriteAllTextAsync(
-                temporaryPath,
-                JsonUtility.ToJson(manifest));
+            var temporaryPath = PersistentInfoFilePath + ".download";
+            await File.WriteAllTextAsync(temporaryPath, JsonUtility.ToJson(manifest));
 
             if (File.Exists(PersistentInfoFilePath))
                 File.Delete(PersistentInfoFilePath);
 
-            File.Move(
-                temporaryPath,
-                PersistentInfoFilePath);
+            File.Move(temporaryPath, PersistentInfoFilePath);
         }
 
-        private static string CombineRemoteUrl(
-            string baseUrl,
-            string relativePath)
+        private static string CombineRemoteUrl(string baseUrl, string relativePath)
         {
-            return
-                $"{baseUrl.TrimEnd('/')}/" +
-                $"{relativePath.TrimStart('/', '\\')}";
+            return $"{baseUrl.TrimEnd('/')}/" + $"{relativePath.TrimStart('/', '\\')}";
         }
 
-        private static string GetBundleFilePath(
-            string relativePath)
+        private static string GetBundleFilePath(string relativePath)
         {
-            return Path.Combine(
-                BundleRootPath,
-                NormalizeRelativePath(relativePath));
+            return Path.Combine(BundleRootPath, NormalizeRelativePath(relativePath));
         }
 
-        private static string NormalizeRelativePath(
-            string relativePath)
+        private static string NormalizeRelativePath(string relativePath)
         {
             if (string.IsNullOrWhiteSpace(relativePath))
             {
-                throw new InvalidDataException(
-                    "Bundle path cannot be empty.");
+                throw new InvalidDataException("Bundle path cannot be empty.");
             }
 
-            var normalizedPath = relativePath
-                .Replace('\\', '/')
-                .TrimStart('/');
+            var normalizedPath = relativePath.Replace('\\', '/').TrimStart('/');
 
-            if (normalizedPath
-                .Split('/')
-                .Any(segment => segment == ".."))
+            if (normalizedPath.Split('/').Any(segment => segment == ".."))
             {
-                throw new InvalidDataException(
-                    $"Invalid bundle path: " +
-                    $"{relativePath}");
+                throw new InvalidDataException("Invalid bundle path: " +
+                                               $"{relativePath}");
             }
 
             return normalizedPath;
         }
 
-        private static void ThrowIfRequestFailed(
-            UnityWebRequest request)
+        private static void ThrowIfRequestFailed(UnityWebRequest request)
         {
             if (request.result !=
                 UnityWebRequest.Result.Success)
             {
-                throw new IOException(
-                    $"Request failed " +
-                    $"({request.responseCode}): " +
-                    request.error);
+                throw new IOException($"Request failed " +
+                                      $"({request.responseCode}): " +
+                                      request.error);
             }
         }
 
-        private static Task AwaitAsyncOperation(
-            AsyncOperation operation)
+        private static Task AwaitAsyncOperation(AsyncOperation operation)
         {
             if (operation.isDone)
                 return Task.CompletedTask;
 
-            var completion =
-                new TaskCompletionSource<bool>();
+            var completion = new TaskCompletionSource<bool>();
 
-            operation.completed += _ =>
-                completion.TrySetResult(true);
+            operation.completed += _ => completion.TrySetResult(true);
 
             return completion.Task;
         }
