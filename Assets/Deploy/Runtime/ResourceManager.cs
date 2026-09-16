@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using UnityEngine;
-using Cysharp.Threading.Tasks;
+using System.Threading.Tasks;
 using Causeless3t.Security;
 using Causeless3t.AssetBundle;
 using UnityEngine.Networking;
@@ -45,16 +45,31 @@ namespace Causeless3t
         
         public bool IsInitialized { get; private set; }
 
-        public async UniTask Initialize()
+        public async Task Initialize()
         {
             IsInitialized = false;
-#if !UNITY_EDITOR
-            var infoFileText = await File.ReadAllTextAsync(StreamingInfoFilePath);
+            Directory.CreateDirectory(BundleRootPath);
+
+#if UNITY_EDITOR
+            if (File.Exists(StreamingInfoFilePath))
+            {
+                var editorInfoText = await File.ReadAllTextAsync(StreamingInfoFilePath);
+                _contentsInfoList = JsonUtility.FromJson<ContentsInfoList>(editorInfoText);
+            }
+#else
+            var infoFileText = await ReadStreamingInfoAsync();
             var streamingInfoList = JsonUtility.FromJson<ContentsInfoList>(infoFileText);
+            if (streamingInfoList == null)
+                throw new InvalidDataException("StreamingAssets contents manifest is invalid.");
+
             if (!Application.version.Equals(streamingInfoList.AppVersion))
                 ClearBundleFiles();
+
             if (!File.Exists(PersistentInfoFilePath))
-                File.Copy(StreamingInfoFilePath, PersistentInfoFilePath);
+                await File.WriteAllTextAsync(PersistentInfoFilePath, infoFileText);
+
+            var persistentInfoText = await File.ReadAllTextAsync(PersistentInfoFilePath);
+            _contentsInfoList = JsonUtility.FromJson<ContentsInfoList>(persistentInfoText);
 #endif
             IsInitialized = true;
         }
@@ -70,121 +85,139 @@ namespace Causeless3t
                 File.Delete(file);
         }
 
-        public async UniTask CheckUpdateAsync(Action<float> onProgress = null)
+        public async Task CheckUpdateAsync(Action<float> onProgress = null)
         {
+            if (!IsInitialized)
+                throw new InvalidOperationException("ResourceManager must be initialized before checking for updates.");
+
+            if (IsDownloading)
+                throw new InvalidOperationException("An asset update is already in progress.");
+
             IsDownloading = true;
-            await UniTask.WaitUntil(() => IsInitialized);
+
+            try
+            {
 #if !UNITY_EDITOR
-            await DownloadUpdatableFiles(onProgress);
-            var infoFileText = await File.ReadAllTextAsync(PersistentInfoFilePath);
-            _contentsInfoList = JsonUtility.FromJson<ContentsInfoList>(infoFileText);
+                await DownloadUpdatableFiles(onProgress);
+                var infoFileText = await File.ReadAllTextAsync(PersistentInfoFilePath);
+                _contentsInfoList = JsonUtility.FromJson<ContentsInfoList>(infoFileText);
 #endif
-            IsDownloading = false;
-            await UniTask.CompletedTask;
+            }
+            finally
+            {
+                IsDownloading = false;
+            }
         }
 
-        private async UniTask DownloadUpdatableFiles(Action<float> onProgress = null)
+        private async Task DownloadUpdatableFiles(Action<float> onProgress = null)
         {
-            // 1. compare with remote fileinfo.dat and local
-            var infoFileText = await File.ReadAllTextAsync(PersistentInfoFilePath);
-            var localInfoList = JsonUtility.FromJson<ContentsInfoList>(infoFileText);
-            ContentsInfoList remoteInfoList;
+            if (string.IsNullOrWhiteSpace(_remoteURL))
+                throw new InvalidOperationException("Remote URL must be configured before checking for updates.");
 
-            using (var www = UnityWebRequest.Get($"{_remoteURL}/{AssetBundleUtil.INFO_FILE_NAME}"))
-            {
-                www.downloadHandler = new DownloadHandlerBuffer();
-                // www.SetRequestHeader("Content-Type", "application/json");
-                // www.SetRequestHeader("Authorization", $"Bearer {SessionKey}");
-                www.useHttpContinue = false;
-                www.timeout = 15;
-                await www.SendWebRequest();
-                if ((www.result != UnityWebRequest.Result.Success && www.result != UnityWebRequest.Result.InProgress) || www.error != null)
-                {
-                    Debug.LogError($"network is not reachable !! {www.error}");
-                    return;
-                }
-                while (!www.downloadHandler.isDone)
-                    await UniTask.Yield();
-                remoteInfoList = JsonUtility.FromJson<ContentsInfoList>(www.downloadHandler.text);
-                if (remoteInfoList == null) return;
-            }
-            if (localInfoList.Revision == remoteInfoList.Revision) return;
-            
-            // 2. check size to download
+            var localInfoText = await File.ReadAllTextAsync(PersistentInfoFilePath);
+            var localInfoList = JsonUtility.FromJson<ContentsInfoList>(localInfoText)
+                ?? throw new InvalidDataException("The local contents manifest is invalid.");
+
+            var remoteInfoText = await DownloadTextAsync(
+                CombineRemoteUrl(_remoteURL, AssetBundleUtil.INFO_FILE_NAME));
+            var remoteInfoList = JsonUtility.FromJson<ContentsInfoList>(remoteInfoText)
+                ?? throw new InvalidDataException("The remote contents manifest is invalid.");
+
+            if (localInfoList.Revision == remoteInfoList.Revision)
+                return;
+
             var modifiedInfoList = CompareFileInfoList(localInfoList, remoteInfoList);
-            if (modifiedInfoList.FileInfos.Count == 0) return;
-            
-            // 3. Log the required download size.
-            long downloadSize = 0;
-            modifiedInfoList.FileInfos.ForEach(info => downloadSize += info.Size);
-            
-            Debug.Log($"Found CDN Downloadable Files {modifiedInfoList.FileInfos.Count}, Size {downloadSize/(1024*1024)}MB");
+            var removedPaths = modifiedInfoList.GetRemovableFiles();
 
-            // 4. Remove/Download CDN Files
-            List<string> removedKeys = modifiedInfoList.GetRemovableFiles();
-            foreach (string path in removedKeys)
+            if (modifiedInfoList.FileInfos.Count == 0 && removedPaths.Count == 0)
             {
-                string filePath = Path.Combine(BundleRootPath, path);
-                File.Delete(filePath);
-                Debug.Log("cdn > removed - " + filePath);
+                await ReplaceManifestAsync(remoteInfoList);
+                return;
             }
-            
-            using (var semaphore = new SemaphoreSlim(5))
+
+            long downloadSize = modifiedInfoList.FileInfos.Sum(info => info.Size);
+            Debug.Log(
+                $"Found CDN Downloadable Files {modifiedInfoList.FileInfos.Count}, " +
+                $"Size {downloadSize / (1024 * 1024)}MB");
+
+            var temporaryFiles = new List<(string TemporaryPath, string FinalPath)>();
+            var temporaryLock = new object();
+            var completed = 0;
+
+            using var semaphore = new SemaphoreSlim(5);
+            var tasks = modifiedInfoList.FileInfos.Select(async info =>
             {
-                int completed = 0;
-                var tasks = new List<UniTask>();
-                for (int i=0; i<modifiedInfoList.FileInfos.Count; ++i)
+                await semaphore.WaitAsync();
+
+                try
                 {
-                    var info = modifiedInfoList.FileInfos[i];
-                    await semaphore.WaitAsync(); // 세마포어 획득
-                    var downloadURL = $"{_remoteURL}{info.Path}";
-                    var savePath = Path.Combine(BundleRootPath, info.Path);
-                    tasks.Add(UniTask.Create(async () =>
+                    var finalPath = GetBundleFilePath(info.Path);
+                    var temporaryPath = finalPath + ".download";
+
+                    var directory = Path.GetDirectoryName(finalPath);
+                    if (!string.IsNullOrEmpty(directory))
+                        Directory.CreateDirectory(directory);
+
+                    if (File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
+
+                    var data = await DownloadBytesAsync(
+                        CombineRemoteUrl(_remoteURL, info.Path));
+
+                    var hash = CRC32.Compute(data).ToString();
+                    if (info.Size != data.LongLength ||
+                        !string.Equals(info.Hash, hash, StringComparison.Ordinal))
                     {
-                        try
-                        {
-                            using var www = UnityWebRequest.Get(downloadURL);
-                            www.downloadHandler = new DownloadHandlerBuffer();
-                            // www.SetRequestHeader("Content-Type", "application/json");
-                            // www.SetRequestHeader("Authorization", $"Bearer {SessionKey}");
-                            www.useHttpContinue = false;
-                            www.timeout = 15;
-                            await www.SendWebRequest();
-                            if ((www.result != UnityWebRequest.Result.Success &&
-                                 www.result != UnityWebRequest.Result.InProgress) || www.error != null)
-                                throw new Exception($"network is not reachable !! {www.error}");
-                            while (!www.downloadHandler.isDone)
-                                await UniTask.Yield();
-                            onProgress?.Invoke(++completed / (float)modifiedInfoList.FileInfos.Count);
+                        throw new InvalidDataException(
+                            $"Downloaded bundle validation failed: {info.Path}");
+                    }
 
-                            remoteInfoList = JsonUtility.FromJson<ContentsInfoList>(www.downloadHandler.text);
-                            if (remoteInfoList == null) return;
+                    await File.WriteAllBytesAsync(temporaryPath, data);
 
-                            var downloadData = www.downloadHandler.data;
-                            if (info.Size != downloadData.Length ||
-                                !info.Hash.Equals(CRC32.Compute(downloadData).ToString()))
-                            {
-                                modifiedInfoList.FileInfos.Add(info);
-                                throw new Exception($"cdn > download size is different !! {downloadData.Length} != {info.Size}");
-                            }
+                    lock (temporaryLock)
+                        temporaryFiles.Add((temporaryPath, finalPath));
 
-                            await File.WriteAllBytesAsync(savePath, www.downloadHandler.data);
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogException(e);
-                        }
-                        finally
-                        {
-                            semaphore.Release();
-                        }
-                    }));
+                    var finished = Interlocked.Increment(ref completed);
+                    onProgress?.Invoke(
+                        finished / (float)modifiedInfoList.FileInfos.Count);
                 }
-                await UniTask.WhenAll(tasks); // 모든 다운로드 완료 대기
+                finally
+                {
+                    semaphore.Release();
+                }
+            }).ToList();
+
+            try
+            {
+                await Task.WhenAll(tasks);
+
+                foreach (var file in temporaryFiles)
+                {
+                    if (File.Exists(file.FinalPath))
+                        File.Delete(file.FinalPath);
+
+                    File.Move(file.TemporaryPath, file.FinalPath);
+                }
+
+                foreach (var removedPath in removedPaths)
+                {
+                    var filePath = GetBundleFilePath(removedPath);
+                    if (File.Exists(filePath))
+                        File.Delete(filePath);
+                }
+
+                await ReplaceManifestAsync(remoteInfoList);
             }
-            
-            // 5. change local fileinfo.dat to remote
-            await File.WriteAllTextAsync(PersistentInfoFilePath, JsonUtility.ToJson(remoteInfoList));
+            catch
+            {
+                foreach (var file in temporaryFiles)
+                {
+                    if (File.Exists(file.TemporaryPath))
+                        File.Delete(file.TemporaryPath);
+                }
+
+                throw;
+            }
         }
         
         private ContentsInfoList CompareFileInfoList(ContentsInfoList localList, ContentsInfoList renewalList)
@@ -215,83 +248,137 @@ namespace Causeless3t
             return retVal;
         }
 
-        private bool IsExistsPersistentPath(string path) => File.Exists(Path.Combine(BundleRootPath, path));
+        private bool IsExistsPersistentPath(string path) => File.Exists(GetBundleFilePath(path));
         public string GetPathByLabel(string label) => _contentsInfoList?.FileInfos.FirstOrDefault(info => info.Label == label)?.Path;
 
-        public async UniTask LoadCacheByLabels(IEnumerable<string> labels)
+        public async Task LoadCacheByLabels(IEnumerable<string> labels)
         {
-            List<UniTask> opList = new();
-            foreach (var label in labels)
-            {
-                var path = GetPathByLabel(label);
-                if (_cachedBundles.ContainsKey(path)) continue;
-                if (string.IsNullOrEmpty(path)) continue;
-                opList.Add(UniTask.Create(async () =>
-                {
-                    var fullPath = IsExistsPersistentPath(path)
-                        ? Path.Combine(BundleRootPath, path)
-                        : Path.Combine(Application.streamingAssetsPath, "contents", path);
-                    var assetBundle = await UnityEngine.AssetBundle.LoadFromFileAsync(fullPath);
-                    if (assetBundle == null) return;
-                    _cachedBundles.Add(path, new AssetBundleRef
-                    {
-                        Bundle = assetBundle
-                    });
-                }));
-            }
-            await UniTask.WhenAll(opList);
+            if (labels == null)
+                throw new ArgumentNullException(nameof(labels));
+
+            var paths = labels
+                .Select(GetPathByLabel)
+                .Where(path => !string.IsNullOrEmpty(path))
+                .Distinct()
+                .ToList();
+
+            await Task.WhenAll(paths.Select(LoadCacheByPath));
         }
         
-        public async UniTask<AssetBundleRef> LoadCacheByPath(string path)
+        public async Task<AssetBundleRef> LoadCacheByPath(string path)
         {
-            if (_cachedBundles.TryGetValue(path, out var abRef)) return abRef;
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("Bundle path cannot be empty.", nameof(path));
+
+            if (_cachedBundles.TryGetValue(path, out var cachedBundle))
+                return cachedBundle;
+
             var fullPath = IsExistsPersistentPath(path)
-                ? Path.Combine(BundleRootPath, path)
+                ? GetBundleFilePath(path)
                 : Path.Combine(Application.streamingAssetsPath, "contents", path);
-            var assetBundle = await UnityEngine.AssetBundle.LoadFromFileAsync(fullPath);
-            if (assetBundle == null) return null;
-            var retValue = new AssetBundleRef
+
+            var assetBundle = await LoadAssetBundleFromFileAsync(fullPath);
+            if (assetBundle == null)
+                return null;
+
+            var result = new AssetBundleRef
             {
                 Bundle = assetBundle
             };
-            _cachedBundles.Add(path, retValue);
-            return retValue;
+
+            _cachedBundles[path] = result;
+            return result;
         }
         
-        public async UniTask<T> LoadAssetByPathAsync<T>(string bundlePath, string assetPath) where T : UnityEngine.Object
+        public async Task<T> LoadAssetByPathAsync<T>(
+            string bundlePath,
+            string assetPath)
+            where T : UnityEngine.Object
         {
     #if UNITY_EDITOR
-            var bundleConvertedPath = bundlePath.Replace('~', '/').Substring(0, bundlePath.Length - 2);
-            var dirPath = Path.Combine(Application.dataPath, bundleConvertedPath);
-            var files = new DirectoryInfo(dirPath).GetFiles();
-            var assetFile = files.FirstOrDefault(file => file.Name.Contains(assetPath));
-            if (assetFile == null) return null;
-            var filePath = Path.Combine("Assets", bundleConvertedPath, assetFile.Name);
-            if (_cachedLocalObjects.TryGetValue(filePath, out var localObject))
+            var bundleConvertedPath = Path.ChangeExtension(
+                bundlePath.Replace('~', '/'),
+                null);
+            var directoryPath = Path.Combine(
+                Application.dataPath,
+                bundleConvertedPath);
+            var directory = new DirectoryInfo(directoryPath);
+
+            if (!directory.Exists)
+                return null;
+
+            var assetFile = directory
+                .GetFiles()
+                .FirstOrDefault(file => file.Name.Contains(assetPath));
+
+            if (assetFile == null)
+                return null;
+
+            var filePath = Path.Combine(
+                    "Assets",
+                    bundleConvertedPath,
+                    assetFile.Name)
+                .Replace('\\', '/');
+
+            if (_cachedLocalObjects.TryGetValue(
+                    filePath,
+                    out var localObject))
+            {
                 return localObject as T;
-            var retObject = AssetDatabase.LoadAssetAtPath<T>(filePath);
-            _cachedLocalObjects.Add(filePath, retObject);
-            return retObject;
+            }
+
+            var loadedAsset = AssetDatabase.LoadAssetAtPath<T>(filePath);
+            _cachedLocalObjects[filePath] = loadedAsset;
+            return loadedAsset;
     #else
-            if (!_cachedBundles.TryGetValue(bundlePath, out AssetBundleRef bundleRef))
-                bundleRef = await LoadCacheByPath(bundlePath);
-            if (bundleRef == null) return null;
-            if (bundleRef.CachedDict.TryGetValue(assetPath, out var asset))
-                return asset as T;
-            var result = await bundleRef.Bundle.LoadAssetAsync(assetPath, typeof(T));
-            bundleRef.CachedDict.Add(assetPath, result);
-            return result as T;
+            if (!_cachedBundles.TryGetValue(
+                    bundlePath,
+                    out var bundleReference))
+            {
+                bundleReference = await LoadCacheByPath(bundlePath);
+            }
+
+            if (bundleReference == null)
+                return null;
+
+            if (bundleReference.CachedDict.TryGetValue(
+                    assetPath,
+                    out var cachedAsset))
+            {
+                return cachedAsset as T;
+            }
+
+            var loadedAsset = await LoadAssetFromBundleAsync(
+                bundleReference.Bundle,
+                assetPath,
+                typeof(T));
+
+            if (loadedAsset != null)
+                bundleReference.CachedDict[assetPath] = loadedAsset;
+
+            return loadedAsset as T;
     #endif
         }
         
-        public async UniTask<GameObject> InstantiateGameObjectByPathAsync(string bundlePath, string assetPath, Transform parent = null, bool instantiateWorldSpace = false)
+        public async Task<GameObject> InstantiateGameObjectByPathAsync(
+            string bundlePath,
+            string assetPath,
+            Transform parent = null,
+            bool instantiateWorldSpace = false)
         {
-            var retValue = await LoadAssetByPathAsync<GameObject>(bundlePath, assetPath);
-            if (retValue == null) return null;
-            return UnityEngine.Object.Instantiate(retValue, parent, instantiateWorldSpace);
+            var prefab = await LoadAssetByPathAsync<GameObject>(
+                bundlePath,
+                assetPath);
+
+            return prefab == null
+                ? null
+                : UnityEngine.Object.Instantiate(
+                    prefab,
+                    parent,
+                    instantiateWorldSpace);
         }
 
-        public async UniTask UnloadAll(bool bUnloadBundle = false)
+        public async Task UnloadAll(bool unloadBundles = false)
         {
     #if UNITY_EDITOR
             _cachedLocalObjects.Clear();
@@ -299,11 +386,150 @@ namespace Causeless3t
             foreach (var pair in _cachedBundles)
                 pair.Value.CachedDict.Clear();
             
-            if (!bUnloadBundle) return;
+            if (!unloadBundles)
+                return;
 
-            foreach (var pair in _cachedBundles)
-                await pair.Value.Bundle.UnloadAsync(true);
+            var unloadTasks = _cachedBundles.Values
+                .Where(reference => reference.Bundle != null)
+                .Select(reference =>
+                    AwaitAsyncOperation(
+                        reference.Bundle.UnloadAsync(true)));
+
+            await Task.WhenAll(unloadTasks);
             _cachedBundles.Clear();
+        }
+
+        private static async Task<string> ReadStreamingInfoAsync()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            return await DownloadTextAsync(StreamingInfoFilePath);
+#else
+            return await File.ReadAllTextAsync(StreamingInfoFilePath);
+#endif
+        }
+
+        private static async Task<string> DownloadTextAsync(string url)
+        {
+            using var request = UnityWebRequest.Get(url);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.useHttpContinue = false;
+            request.timeout = 15;
+
+            await SendWebRequestAsync(request);
+            ThrowIfRequestFailed(request);
+
+            return request.downloadHandler.text;
+        }
+
+        private static async Task<byte[]> DownloadBytesAsync(string url)
+        {
+            using var request = UnityWebRequest.Get(url);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.useHttpContinue = false;
+            request.timeout = 15;
+
+            await SendWebRequestAsync(request);
+            ThrowIfRequestFailed(request);
+
+            return request.downloadHandler.data;
+        }
+
+        private static async Task ReplaceManifestAsync(
+            ContentsInfoList manifest)
+        {
+            Directory.CreateDirectory(BundleRootPath);
+
+            var temporaryPath = PersistentInfoFilePath + ".download";
+            await File.WriteAllTextAsync(
+                temporaryPath,
+                JsonUtility.ToJson(manifest));
+
+            if (File.Exists(PersistentInfoFilePath))
+                File.Delete(PersistentInfoFilePath);
+
+            File.Move(temporaryPath, PersistentInfoFilePath);
+        }
+
+        private static string CombineRemoteUrl(
+            string baseUrl,
+            string relativePath)
+        {
+            return $"{baseUrl.TrimEnd('/')}/{relativePath.TrimStart('/', '\\')}";
+        }
+
+        private static string GetBundleFilePath(string relativePath)
+        {
+            if (string.IsNullOrWhiteSpace(relativePath))
+                throw new InvalidDataException("Bundle path cannot be empty.");
+
+            var normalizedPath = relativePath
+                .Replace('\\', '/')
+                .TrimStart('/');
+
+            if (normalizedPath
+                .Split('/')
+                .Any(segment => segment == ".."))
+            {
+                throw new InvalidDataException(
+                    $"Invalid bundle path: {relativePath}");
+            }
+
+            return Path.Combine(BundleRootPath, normalizedPath);
+        }
+
+        private static void ThrowIfRequestFailed(
+            UnityWebRequest request)
+        {
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                throw new IOException(
+                    $"Request failed ({request.responseCode}): " +
+                    request.error);
+            }
+        }
+
+        private static Task SendWebRequestAsync(
+            UnityWebRequest request)
+        {
+            return AwaitAsyncOperation(request.SendWebRequest());
+        }
+
+        private static Task AwaitAsyncOperation(
+            AsyncOperation operation)
+        {
+            if (operation.isDone)
+                return Task.CompletedTask;
+
+            var completion =
+                new TaskCompletionSource<bool>();
+
+            operation.completed += _ =>
+                completion.TrySetResult(true);
+
+            return completion.Task;
+        }
+
+        private static async Task<UnityEngine.AssetBundle>
+            LoadAssetBundleFromFileAsync(string path)
+        {
+            var request =
+                UnityEngine.AssetBundle.LoadFromFileAsync(path);
+
+            await AwaitAsyncOperation(request);
+            return request.assetBundle;
+        }
+
+        private static async Task<UnityEngine.Object>
+            LoadAssetFromBundleAsync(
+                UnityEngine.AssetBundle bundle,
+                string assetPath,
+                Type assetType)
+        {
+            var request =
+                bundle.LoadAssetAsync(assetPath, assetType);
+
+            await AwaitAsyncOperation(request);
+            return request.asset;
         }
     }
 }
