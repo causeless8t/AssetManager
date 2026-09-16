@@ -18,7 +18,7 @@ https://github.com/causeless8t/AssetManager.git
 특정 버전을 사용하려면 태그를 지정합니다.
 
 ```text
-https://github.com/causeless8t/AssetManager.git#2.0.1
+https://github.com/causeless8t/AssetManager.git#2.1.0
 ```
 
 ## 주요 구성
@@ -33,6 +33,11 @@ https://github.com/causeless8t/AssetManager.git#2.0.1
 Android에서는 APK 또는 AAB 내부의 StreamingAssets 번들을
 `UnityWebRequestAssetBundle`로 읽습니다. 패치로 내려받아
 `Application.persistentDataPath`에 저장된 번들은 파일에서 직접 로드합니다.
+
+빌드할 모든 대상 폴더는 한 번의 AssetBundle 빌드에 포함됩니다.
+생성된 `filesinfo.dat`에는 번들별 의존성이 기록되며,
+`ResourceManager`는 대상 번들보다 의존 번들을 먼저 로드합니다.
+공유 의존 번들은 다른 번들에서 사용 중인 동안 해제되지 않습니다.
 
 ## 빌드 창
 

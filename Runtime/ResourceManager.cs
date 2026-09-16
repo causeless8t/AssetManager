@@ -15,12 +15,17 @@ namespace Causeless3t
     {
         public sealed class AssetBundleRef
         {
-            internal AssetBundleRef(UnityEngine.AssetBundle bundle)
+            internal AssetBundleRef(
+                UnityEngine.AssetBundle bundle,
+                IReadOnlyList<string> dependencies)
             {
                 Bundle = bundle;
+                Dependencies = dependencies ?? Array.Empty<string>();
             }
 
             public UnityEngine.AssetBundle Bundle { get; }
+
+            internal IReadOnlyList<string> Dependencies { get; }
 
             internal readonly Dictionary<string, UnityEngine.Object> CachedAssets = new();
 
@@ -31,6 +36,7 @@ namespace Causeless3t
         private readonly Dictionary<string, AssetBundleRef> _cachedBundles = new();
         private readonly Dictionary<string, Task<AssetBundleRef>> _loadingBundles = new();
         private readonly Dictionary<string, Task<bool>> _unloadingBundles = new();
+        private readonly HashSet<string> _explicitBundlePaths = new();
 
 #if UNITY_EDITOR
         private readonly Dictionary<string, UnityEngine.Object> _cachedLocalObjects = new();
@@ -80,6 +86,51 @@ namespace Causeless3t
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("Bundle path cannot be empty.", nameof(path));
 
+            var result = await LoadBundleGraphAsync(
+                path,
+                new HashSet<string>(StringComparer.Ordinal));
+
+            if (result != null)
+                _explicitBundlePaths.Add(path);
+
+            return result;
+        }
+
+        private async Task<AssetBundleRef> LoadBundleGraphAsync(
+            string path,
+            HashSet<string> loadingPath)
+        {
+            if (!loadingPath.Add(path))
+            {
+                throw new InvalidDataException(
+                    $"Circular AssetBundle dependency detected: {path}");
+            }
+
+            try
+            {
+                foreach (var dependency in _updater.GetDependencies(path))
+                {
+                    var dependencyBundle = await LoadBundleGraphAsync(
+                        dependency,
+                        loadingPath);
+
+                    if (dependencyBundle == null)
+                    {
+                        throw new InvalidDataException(
+                            $"Failed to load dependency '{dependency}' for '{path}'.");
+                    }
+                }
+
+                return await LoadSingleBundleAsync(path);
+            }
+            finally
+            {
+                loadingPath.Remove(path);
+            }
+        }
+
+        private async Task<AssetBundleRef> LoadSingleBundleAsync(string path)
+        {
             if (_unloadingBundles.TryGetValue(path, out var pendingUnload))
                 await pendingUnload;
 
@@ -127,7 +178,9 @@ namespace Causeless3t
             if (assetBundle == null)
                 return null;
 
-            var result = new AssetBundleRef(assetBundle);
+            var result = new AssetBundleRef(
+                assetBundle,
+                _updater.GetDependencies(path));
 
             _cachedBundles[path] = result;
             return result;
@@ -234,7 +287,11 @@ namespace Causeless3t
             if (_unloadingBundles.TryGetValue(path, out var pendingUnload))
                 return await pendingUnload;
 
-            var unloadingTask = UnloadBundleCoreAsync(path, unloadAllLoadedObjects);
+            _explicitBundlePaths.Remove(path);
+
+            var unloadingTask = UnloadUnreferencedBundleCoreAsync(
+                path,
+                unloadAllLoadedObjects);
             _unloadingBundles[path] = unloadingTask;
 
             try
@@ -250,7 +307,9 @@ namespace Causeless3t
             }
         }
 
-        private async Task<bool> UnloadBundleCoreAsync(string path, bool unloadAllLoadedObjects)
+        private async Task<bool> UnloadUnreferencedBundleCoreAsync(
+            string path,
+            bool unloadAllLoadedObjects)
         {
             if (_loadingBundles.TryGetValue(path, out var pendingLoad))
             {
@@ -265,6 +324,9 @@ namespace Causeless3t
             }
 
             if (!_cachedBundles.TryGetValue(path, out var bundleReference))
+                return false;
+
+            if (IsBundleRequired(path))
                 return false;
 
             var pendingAssetLoads = bundleReference.LoadingAssets.Values.ToArray();
@@ -291,7 +353,24 @@ namespace Causeless3t
                     bundleReference.Bundle.UnloadAsync(unloadAllLoadedObjects));
             }
 
+            foreach (var dependency in bundleReference.Dependencies)
+            {
+                await UnloadUnreferencedBundleCoreAsync(
+                    dependency,
+                    unloadAllLoadedObjects);
+            }
+
             return true;
+        }
+
+        private bool IsBundleRequired(string path)
+        {
+            if (_explicitBundlePaths.Contains(path))
+                return true;
+
+            return _cachedBundles.Any(pair =>
+                !string.Equals(pair.Key, path, StringComparison.Ordinal) &&
+                pair.Value.Dependencies.Contains(path));
         }
 
         public async Task UnloadAll(bool unloadBundles = false)
@@ -351,9 +430,22 @@ namespace Causeless3t
                 return;
             }
 
-            var bundlePaths = _cachedBundles.Keys.ToArray();
-            await Task.WhenAll(
-                bundlePaths.Select(path => UnloadBundleAsync(path, true)));
+            _explicitBundlePaths.Clear();
+
+            var bundleReferences = _cachedBundles.Values.ToArray();
+            _cachedBundles.Clear();
+
+            foreach (var reference in bundleReferences)
+            {
+                reference.LoadingAssets.Clear();
+                reference.CachedAssets.Clear();
+
+                if (reference.Bundle != null)
+                {
+                    await AwaitAsyncOperation(
+                        reference.Bundle.UnloadAsync(true));
+                }
+            }
         }
 
         private static async Task<UnityEngine.AssetBundle> LoadAssetBundleFromFileAsync(string path)

@@ -117,6 +117,14 @@ namespace Causeless3t
             return _contentsInfoList?.FileInfos.FirstOrDefault(info => info.Label == label)?.Path;
         }
 
+        internal IReadOnlyList<string> GetDependencies(string path)
+        {
+            var fileInfo = _contentsInfoList?.FileInfos.FirstOrDefault(
+                info => string.Equals(info.Path, path, StringComparison.Ordinal));
+
+            return fileInfo?.Dependencies ?? (IReadOnlyList<string>)Array.Empty<string>();
+        }
+
         internal bool TryGetPersistentBundlePath(
             string relativePath,
             out string path)

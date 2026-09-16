@@ -25,22 +25,35 @@ namespace Causeless3t.AssetBundle.Editor
         {
             Validate();
             _settings.EnsureCollections();
-            _buildSnapshots = LoadBuildSnapshots();
+            _buildSnapshots = new Dictionary<string, List<ContentsInfo>>(
+                StringComparer.Ordinal);
 
             var bundleRoot = _settings.GetBundleRoot(platform);
             PrepareOutputDirectory(bundleRoot, platform);
+            var buildEntries = new List<BundleBuildEntry>();
 
             for (var i = 0; i < _settings.AssetPathes.Count; i++)
             {
                 var targetPath = NormalizeTargetPath(_settings.AssetPathes[i]);
                 if (!string.IsNullOrEmpty(targetPath))
-                    BuildTargetFolder(targetPath, bundleRoot, platform);
+                {
+                    var entry = CreateBuildEntry(targetPath);
+                    if (entry != null)
+                        buildEntries.Add(entry);
+                }
 
-                onProgress?.Invoke((i + 1f) / Math.Max(1, _settings.AssetPathes.Count));
+                onProgress?.Invoke((i + 1f) /
+                                   Math.Max(1, _settings.AssetPathes.Count + 1));
             }
 
+            if (buildEntries.Count == 0)
+                throw new InvalidOperationException("No assets were found in the configured target folders.");
+
+            var unityManifest = BuildBundles(buildEntries, bundleRoot, platform);
+            onProgress?.Invoke(1f);
+
             WriteBuildSnapshots();
-            WriteContentsManifest(bundleRoot, platform);
+            WriteContentsManifest(bundleRoot, platform, unityManifest, buildEntries);
             CleanBuildOutput(bundleRoot);
             AssetDatabase.Refresh();
             return bundleRoot;
@@ -76,41 +89,49 @@ namespace Causeless3t.AssetBundle.Editor
             Directory.CreateDirectory(bundleRoot);
         }
 
-        private void BuildTargetFolder(string targetPath, string bundleRoot, BuildTarget platform)
+        private BundleBuildEntry CreateBuildEntry(string targetPath)
         {
             var assetRoot = $"Assets/{targetPath}";
             var assetPaths = FindAssetPaths(assetRoot);
             if (assetPaths.Count == 0)
-                return;
+                return null;
 
             var currentSnapshot = CreateSnapshot(assetPaths);
-            var requiresBuild = HasSnapshotChanged(targetPath, currentSnapshot);
             _buildSnapshots[targetPath] = currentSnapshot;
 
             var bundleFileName = GetBundleFileName(targetPath);
-            if (!requiresBuild && CopyPreviousBundle(bundleFileName, bundleRoot, platform))
-                return;
-
-            var build = new AssetBundleBuild
+            return new BundleBuildEntry
             {
-                assetBundleName = Path.GetFileNameWithoutExtension(bundleFileName),
-                assetBundleVariant = AssetBundleUtil.ASSET_BUNDLE_EXTENSION_NAME,
-                assetNames = assetPaths.ToArray()
+                FileName = bundleFileName,
+                Build = new AssetBundleBuild
+                {
+                    assetBundleName = Path.GetFileNameWithoutExtension(bundleFileName),
+                    assetBundleVariant = AssetBundleUtil.ASSET_BUNDLE_EXTENSION_NAME,
+                    assetNames = assetPaths.ToArray()
+                }
             };
+        }
 
+        private static AssetBundleManifest BuildBundles(
+            IReadOnlyCollection<BundleBuildEntry> entries,
+            string bundleRoot,
+            BuildTarget platform)
+        {
             var manifest = BuildPipeline.BuildAssetBundles(
                 bundleRoot,
-                new[] { build },
+                entries.Select(entry => entry.Build).ToArray(),
                 BuildAssetBundleOptions.DisableWriteTypeTree |
-                BuildAssetBundleOptions.UncompressedAssetBundle |
-                BuildAssetBundleOptions.ForceRebuildAssetBundle,
+                BuildAssetBundleOptions.UncompressedAssetBundle,
                 platform);
 
             if (manifest == null)
-                throw new InvalidOperationException($"AssetBundle build failed: {targetPath}");
+                throw new InvalidOperationException("AssetBundle build failed.");
 
-            NormalizeBuiltBundleName(bundleRoot, bundleFileName);
-            Debug.Log($"Built {assetPaths.Count} assets into {Path.Combine(bundleRoot, bundleFileName)}");
+            foreach (var entry in entries)
+                NormalizeBuiltBundleName(bundleRoot, entry.FileName);
+
+            Debug.Log($"Built {entries.Count} AssetBundles into {bundleRoot}");
+            return manifest;
         }
 
         private static List<string> FindAssetPaths(string assetRoot)
@@ -143,49 +164,16 @@ namespace Causeless3t.AssetBundle.Editor
             }).ToList();
         }
 
-        private bool HasSnapshotChanged(string targetPath, IReadOnlyCollection<ContentsInfo> currentSnapshot)
-        {
-            if (!_buildSnapshots.TryGetValue(targetPath, out var previousSnapshot))
-                return true;
-
-            if (previousSnapshot.Count != currentSnapshot.Count)
-                return true;
-
-            var previousByPath = previousSnapshot.ToDictionary(info => info.Path, StringComparer.Ordinal);
-            return currentSnapshot.Any(current =>
-                !previousByPath.TryGetValue(current.Path, out var previous) ||
-                !current.HasSameContent(previous));
-        }
-
-        private bool CopyPreviousBundle(string bundleFileName, string bundleRoot, BuildTarget platform)
-        {
-            var previousRoot = _settings.IsIntegralBuild(platform)
-                ? GetPreviousIntegralRoot(platform)
-                : GetPreviousRevisionRoot(platform);
-
-            var sourcePath = Path.Combine(previousRoot, bundleFileName);
-            if (!File.Exists(sourcePath))
-                return false;
-
-            File.Copy(sourcePath, Path.Combine(bundleRoot, bundleFileName), true);
-            return true;
-        }
-
         private string GetPreviousIntegralRoot(BuildTarget platform)
         {
             return Path.Combine(_settings.OutputPath, _settings.GetPlatformDirectory(platform), "integral_prev");
         }
 
-        private string GetPreviousRevisionRoot(BuildTarget platform)
-        {
-            return Path.Combine(
-                _settings.OutputPath,
-                _settings.GetPlatformDirectory(platform),
-                _settings.GetAppVersion(platform),
-                Math.Max(0, _settings.GetRevision(platform) - 1).ToString());
-        }
-
-        private void WriteContentsManifest(string bundleRoot, BuildTarget platform)
+        private void WriteContentsManifest(
+            string bundleRoot,
+            BuildTarget platform,
+            AssetBundleManifest unityManifest,
+            IReadOnlyCollection<BundleBuildEntry> entries)
         {
             var labels = new Dictionary<string, string>(StringComparer.Ordinal);
             for (var i = 0; i < _settings.AssetPathes.Count; i++)
@@ -195,10 +183,34 @@ namespace Causeless3t.AssetBundle.Editor
                     labels[path] = _settings.AssetLabels[i] ?? string.Empty;
             }
 
+            var unityBundleNames = unityManifest.GetAllAssetBundles();
+            var expectedNames = entries.ToDictionary(
+                entry => ResolveUnityBundleName(entry.Build, unityBundleNames),
+                entry => entry.FileName,
+                StringComparer.OrdinalIgnoreCase);
+            var dependencies = new Dictionary<string, IReadOnlyList<string>>(
+                StringComparer.Ordinal);
+
+            foreach (var entry in entries)
+            {
+                var unityBundleName = ResolveUnityBundleName(
+                    entry.Build,
+                    unityBundleNames);
+                var dependencyPaths = unityManifest
+                    .GetDirectDependencies(unityBundleName)
+                    .Select(dependency => expectedNames.TryGetValue(dependency, out var expectedName)
+                        ? expectedName
+                        : dependency)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                dependencies[entry.FileName] = dependencyPaths;
+            }
+
             var manifest = ContentsInfoList.GetContentsInfoListFromFiles(
                 bundleRoot,
                 labels,
-                AssetBundleUtil.ASSET_BUNDLE_EXTENSION_NAME);
+                AssetBundleUtil.ASSET_BUNDLE_EXTENSION_NAME,
+                dependencies);
             manifest.Platform = platform == BuildTarget.Android ? 1 : 2;
             manifest.AppVersion = _settings.GetAppVersion(platform);
             manifest.Revision = _settings.GetRevision(platform);
@@ -207,15 +219,6 @@ namespace Causeless3t.AssetBundle.Editor
             File.WriteAllText(
                 Path.Combine(bundleRoot, AssetBundleUtil.INFO_FILE_NAME),
                 manifest.ToJSONString());
-        }
-
-        private Dictionary<string, List<ContentsInfo>> LoadBuildSnapshots()
-        {
-            var path = GetBuildSnapshotPath();
-            if (!File.Exists(path))
-                return new Dictionary<string, List<ContentsInfo>>();
-
-            return DictionaryJson.FromJson<string, List<ContentsInfo>>(File.ReadAllText(path));
         }
 
         private void WriteBuildSnapshots()
@@ -267,6 +270,31 @@ namespace Causeless3t.AssetBundle.Editor
         private static string GetBundleFileName(string targetPath)
         {
             return $"{targetPath.Replace('/', '~')}.{AssetBundleUtil.ASSET_BUNDLE_EXTENSION_NAME}";
+        }
+
+        private static string GetUnityBundleName(AssetBundleBuild build)
+        {
+            return string.IsNullOrEmpty(build.assetBundleVariant)
+                ? build.assetBundleName
+                : $"{build.assetBundleName}.{build.assetBundleVariant}";
+        }
+
+        private static string ResolveUnityBundleName(
+            AssetBundleBuild build,
+            IEnumerable<string> unityBundleNames)
+        {
+            var expectedName = GetUnityBundleName(build);
+            var actualName = unityBundleNames.FirstOrDefault(name =>
+                string.Equals(name, expectedName, StringComparison.OrdinalIgnoreCase));
+
+            return actualName ?? throw new InvalidOperationException(
+                $"Built AssetBundle is missing from the Unity manifest: {expectedName}");
+        }
+
+        private sealed class BundleBuildEntry
+        {
+            internal string FileName;
+            internal AssetBundleBuild Build;
         }
     }
 }

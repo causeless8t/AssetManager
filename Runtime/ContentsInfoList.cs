@@ -12,6 +12,7 @@ namespace Causeless3t.AssetBundle
         public string Path;
         public string Hash;
         public long Size;
+        public List<string> Dependencies = new();
 
         public bool HasSameContent(ContentsInfo other)
         {
@@ -59,7 +60,8 @@ namespace Causeless3t.AssetBundle
         public static ContentsInfoList GetContentsInfoListFromFiles(
             string contentsRootDirectoryPath,
             Dictionary<string, string> bundleLabels,
-            string filteredExtension)
+            string filteredExtension,
+            IReadOnlyDictionary<string, IReadOnlyList<string>> bundleDependencies = null)
         {
             if (string.IsNullOrWhiteSpace(contentsRootDirectoryPath))
             {
@@ -99,12 +101,20 @@ namespace Causeless3t.AssetBundle
                     break;
                 }
 
+                var dependencies = new List<string>();
+                if (bundleDependencies != null &&
+                    bundleDependencies.TryGetValue(file.Name, out var dependencyPaths))
+                {
+                    dependencies.AddRange(dependencyPaths);
+                }
+
                 result.FileInfos.Add(new ContentsInfo
                 {
                     Label = label,
                     Path = file.Name,
                     Hash = AssetBundleUtil.GetFileHash(file.FullName),
-                    Size = file.Length
+                    Size = file.Length,
+                    Dependencies = dependencies
                 });
             }
 
