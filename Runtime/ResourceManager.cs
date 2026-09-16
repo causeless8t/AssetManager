@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -57,9 +58,10 @@ namespace Causeless3t
         }
 
         public Task CheckUpdateAsync(
-            Action<float> onProgress = null)
+            Action<float> onProgress = null,
+            CancellationToken cancellationToken = default)
         {
-            return _updater.CheckUpdateAsync(onProgress);
+            return _updater.CheckUpdateAsync(onProgress, cancellationToken);
         }
 
         public string GetPathByLabel(string label)
@@ -453,6 +455,10 @@ namespace Causeless3t
             var request = UnityEngine.AssetBundle.LoadFromFileAsync(path);
 
             await AwaitAsyncOperation(request);
+
+            if (request.assetBundle == null)
+                throw new IOException($"Failed to load AssetBundle from file: {path}");
+
             return request.assetBundle;
         }
 
@@ -469,7 +475,11 @@ namespace Causeless3t
                     request.error);
             }
 
-            return DownloadHandlerAssetBundle.GetContent(request);
+            var assetBundle = DownloadHandlerAssetBundle.GetContent(request);
+            if (assetBundle == null)
+                throw new IOException($"AssetBundle response was empty: {url}");
+
+            return assetBundle;
         }
 
         private static async Task<UnityEngine.Object> LoadAssetFromBundleAsync(UnityEngine.AssetBundle bundle,

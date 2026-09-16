@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Causeless3t.AssetBundle;
@@ -82,8 +83,12 @@ namespace Causeless3t
             IsInitialized = true;
         }
 
-        internal async Task CheckUpdateAsync(Action<float> onProgress = null)
+        internal async Task CheckUpdateAsync(
+            Action<float> onProgress = null,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (!IsInitialized)
             {
                 throw new InvalidOperationException("ResourceManager must be initialized " +
@@ -100,8 +105,9 @@ namespace Causeless3t
             try
             {
 #if !UNITY_EDITOR
-                await DownloadUpdatableFiles(onProgress);
+                await DownloadUpdatableFiles(onProgress, cancellationToken);
 
+                cancellationToken.ThrowIfCancellationRequested();
                 var infoFileText = await File.ReadAllTextAsync(PersistentInfoFilePath);
                 _contentsInfoList = JsonUtility.FromJson<ContentsInfoList>(infoFileText);
 #endif
@@ -154,8 +160,12 @@ namespace Causeless3t
             }
         }
 
-        private async Task DownloadUpdatableFiles(Action<float> onProgress)
+        private async Task DownloadUpdatableFiles(
+            Action<float> onProgress,
+            CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (string.IsNullOrWhiteSpace(_remoteUrl))
             {
                 throw new InvalidOperationException("Remote URL must be configured before " +
@@ -163,80 +173,100 @@ namespace Causeless3t
             }
 
             var localInfoText = await File.ReadAllTextAsync(PersistentInfoFilePath);
+            cancellationToken.ThrowIfCancellationRequested();
+
             var localInfoList = JsonUtility.FromJson<ContentsInfoList>(localInfoText)
                                 ?? throw new InvalidDataException("The local contents manifest is invalid.");
 
-            var remoteInfoText = await DownloadTextAsync(CombineRemoteUrl(_remoteUrl, AssetBundleUtil.INFO_FILE_NAME));
-            var remoteInfoList = JsonUtility.FromJson<ContentsInfoList>(remoteInfoText) 
+            var remoteInfoText = await DownloadTextAsync(
+                CombineRemoteUrl(_remoteUrl, AssetBundleUtil.INFO_FILE_NAME),
+                cancellationToken);
+            var remoteInfoList = JsonUtility.FromJson<ContentsInfoList>(remoteInfoText)
                                  ?? throw new InvalidDataException("The remote contents manifest is invalid.");
 
             if (localInfoList.Revision == remoteInfoList.Revision)
-            {
                 return;
-            }
 
             var modifiedInfoList = CompareFileInfoList(localInfoList, remoteInfoList);
             var removedPaths = modifiedInfoList.GetRemovableFiles();
 
             if (modifiedInfoList.FileInfos.Count == 0 && removedPaths.Count == 0)
             {
-                await ReplaceManifestAsync(remoteInfoList);
+                await ReplaceManifestAsync(remoteInfoList, cancellationToken);
                 return;
             }
 
-            var downloadSize = modifiedInfoList.FileInfos.Sum(info => info.Size);
-            Debug.Log("Found CDN Downloadable Files " +
-                      $"{modifiedInfoList.FileInfos.Count}, " +
-                      $"Size {downloadSize / (1024 * 1024)}MB");
-
             var temporaryFiles = new List<(string TemporaryPath, string FinalPath)>();
             var temporaryLock = new object();
+            var failureLock = new object();
+            Exception firstFailure = null;
             var completed = 0;
 
             using var semaphore = new SemaphoreSlim(MaxConcurrentDownloads);
+            using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken);
+            var batchToken = batchCancellation.Token;
 
             var tasks = modifiedInfoList.FileInfos.Select(async info =>
+            {
+                await semaphore.WaitAsync(batchToken);
+                string temporaryPath = null;
+
+                try
+                {
+                    var finalPath = GetBundleFilePath(info.Path);
+                    temporaryPath = finalPath + ".download";
+
+                    var directory = Path.GetDirectoryName(finalPath);
+                    if (!string.IsNullOrEmpty(directory))
+                        Directory.CreateDirectory(directory);
+
+                    if (File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
+
+                    var data = await DownloadBytesAsync(
+                        CombineRemoteUrl(_remoteUrl, info.Path),
+                        batchToken);
+
+                    ValidateDownload(info, data);
+                    batchToken.ThrowIfCancellationRequested();
+                    await File.WriteAllBytesAsync(temporaryPath, data);
+                    batchToken.ThrowIfCancellationRequested();
+
+                    lock (temporaryLock)
                     {
-                        await semaphore.WaitAsync();
+                        temporaryFiles.Add((temporaryPath, finalPath));
+                    }
 
-                        try
+                    var finished = Interlocked.Increment(ref completed);
+                    onProgress?.Invoke(finished / (float)modifiedInfoList.FileInfos.Count);
+                }
+                catch (Exception exception)
+                {
+                    if (temporaryPath != null && File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
+
+                    if (!(exception is OperationCanceledException && batchToken.IsCancellationRequested))
+                    {
+                        lock (failureLock)
                         {
-                            var finalPath = GetBundleFilePath(info.Path);
-                            var temporaryPath = finalPath + ".download";
-
-                            var directory = Path.GetDirectoryName(finalPath);
-                            if (!string.IsNullOrEmpty(directory))
-                            {
-                                Directory.CreateDirectory(directory);
-                            }
-
-                            if (File.Exists(temporaryPath))
-                            {
-                                File.Delete(temporaryPath);
-                            }
-
-                            var data = await DownloadBytesAsync(CombineRemoteUrl(_remoteUrl, info.Path));
-
-                            ValidateDownload(info, data);
-                            await File.WriteAllBytesAsync(temporaryPath, data);
-
-                            lock (temporaryLock)
-                            {
-                                temporaryFiles.Add((temporaryPath, finalPath));
-                            }
-
-                            var finished = Interlocked.Increment(ref completed);
-                            onProgress?.Invoke(finished / (float)modifiedInfoList.FileInfos.Count);
+                            firstFailure ??= exception;
                         }
-                        finally
-                        {
-                            semaphore.Release();
-                        }
-                    }).ToList();
+                    }
+
+                    batchCancellation.Cancel();
+                    throw;
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            }).ToList();
 
             try
             {
                 await Task.WhenAll(tasks);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 foreach (var file in temporaryFiles)
                 {
@@ -253,17 +283,23 @@ namespace Causeless3t
                         File.Delete(filePath);
                 }
 
-                await ReplaceManifestAsync(remoteInfoList);
+                // Bundle replacement and manifest replacement are one commit phase.
+                // Once it starts, finish it to avoid mixing new bundles with an old manifest.
+                await ReplaceManifestAsync(remoteInfoList, CancellationToken.None);
             }
             catch
             {
-                foreach (var file in temporaryFiles)
+                foreach (var info in modifiedInfoList.FileInfos)
                 {
-                    if (File.Exists(file.TemporaryPath))
-                    {
-                        File.Delete(file.TemporaryPath);
-                    }
+                    var temporaryPath = GetBundleFilePath(info.Path) + ".download";
+                    if (File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
                 }
+
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (firstFailure != null)
+                    ExceptionDispatchInfo.Capture(firstFailure).Throw();
 
                 throw;
             }
@@ -315,34 +351,51 @@ namespace Causeless3t
         private static async Task<string> ReadStreamingInfoAsync()
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
-            return await DownloadTextAsync(StreamingInfoFilePath);
+            return await DownloadTextAsync(StreamingInfoFilePath, CancellationToken.None);
 #else
             return await File.ReadAllTextAsync(StreamingInfoFilePath);
 #endif
         }
 
-        private static async Task<string> DownloadTextAsync(string url)
+        private static async Task<string> DownloadTextAsync(
+            string url,
+            CancellationToken cancellationToken)
         {
             using var request = UnityWebRequest.Get(url);
             request.downloadHandler = new DownloadHandlerBuffer();
             ConfigureRequest(request);
 
-            await AwaitAsyncOperation(request.SendWebRequest());
-            ThrowIfRequestFailed(request);
+            await SendRequestAsync(request, cancellationToken);
 
             return request.downloadHandler.text;
         }
 
-        private static async Task<byte[]> DownloadBytesAsync(string url)
+        private static async Task<byte[]> DownloadBytesAsync(
+            string url,
+            CancellationToken cancellationToken)
         {
             using var request = UnityWebRequest.Get(url);
             request.downloadHandler = new DownloadHandlerBuffer();
             ConfigureRequest(request);
 
-            await AwaitAsyncOperation(request.SendWebRequest());
-            ThrowIfRequestFailed(request);
+            await SendRequestAsync(request, cancellationToken);
 
             return request.downloadHandler.data;
+        }
+
+        private static async Task SendRequestAsync(
+            UnityWebRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            using (cancellationToken.Register(request.Abort))
+            {
+                await AwaitAsyncOperation(request.SendWebRequest());
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfRequestFailed(request);
         }
 
         private static void ConfigureRequest(UnityWebRequest request)
@@ -351,17 +404,33 @@ namespace Causeless3t
             request.timeout = RequestTimeoutSeconds;
         }
 
-        private static async Task ReplaceManifestAsync(ContentsInfoList manifest)
+        private static async Task ReplaceManifestAsync(
+            ContentsInfoList manifest,
+            CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Directory.CreateDirectory(BundleRootPath);
 
             var temporaryPath = PersistentInfoFilePath + ".download";
-            await File.WriteAllTextAsync(temporaryPath, JsonUtility.ToJson(manifest));
+            try
+            {
+                await File.WriteAllTextAsync(
+                    temporaryPath,
+                    JsonUtility.ToJson(manifest));
+                cancellationToken.ThrowIfCancellationRequested();
 
-            if (File.Exists(PersistentInfoFilePath))
-                File.Delete(PersistentInfoFilePath);
+                if (File.Exists(PersistentInfoFilePath))
+                    File.Delete(PersistentInfoFilePath);
 
-            File.Move(temporaryPath, PersistentInfoFilePath);
+                File.Move(temporaryPath, PersistentInfoFilePath);
+            }
+            catch
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+
+                throw;
+            }
         }
 
         private static string CombineRemoteUrl(string baseUrl, string relativePath)

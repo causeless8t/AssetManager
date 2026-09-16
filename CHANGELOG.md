@@ -5,6 +5,24 @@
 문서 형식은 [변경 이력 유지하기](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 버전은 [유의적 버전](https://semver.org/lang/ko/) 규칙을 따릅니다.
 
+## [2.2.0] - 2026-09-16
+
+### 추가
+
+- `CheckUpdateAsync()`에서 `CancellationToken`을 지원합니다.
+
+### 변경
+
+- 한 파일의 다운로드나 검증이 실패하면 같은 배치의 나머지 요청을 중단합니다.
+- 패치 취소, 네트워크 오류, 무결성 오류를 각각
+  `OperationCanceledException`, `IOException`, `InvalidDataException`으로 구분합니다.
+
+### 수정
+
+- 취소되거나 실패한 패치의 `.download` 임시 파일을 제거합니다.
+- AssetBundle 파일 또는 응답이 비어 있을 때 경로를 포함한 예외를 발생시킵니다.
+- 런타임 패치 코드에서 직접 출력하던 `Debug.Log()`를 제거했습니다.
+
 ## [2.1.0] - 2026-09-16
 
 ### 추가

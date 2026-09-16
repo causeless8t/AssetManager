@@ -1,6 +1,6 @@
 {
   "name": "com.causeless3t.assetmanager",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "displayName": "AssetManager",
   "description": "AssetBundle 빌드, 원격 패치, 무결성 검증, 캐시 및 에셋 로딩을 제공하는 Unity 패키지입니다.",
   "unity": "2022.3",
