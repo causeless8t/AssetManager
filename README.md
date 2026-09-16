@@ -18,7 +18,7 @@ https://github.com/causeless8t/AssetManager.git
 특정 버전을 사용하려면 태그를 지정합니다.
 
 ```text
-https://github.com/causeless8t/AssetManager.git#2.2.1
+https://github.com/causeless8t/AssetManager.git#2.3.0
 ```
 
 ## 주요 구성
@@ -54,6 +54,19 @@ await resourceManager.CheckUpdateAsync(
 파일 교체가 시작된 이후에는 번들과 매니페스트의 일관성을 위해 교체 작업을 완료합니다.
 진행률은 각 병렬 요청의 실제 수신 바이트를 합산하여 전체 다운로드 바이트를 기준으로 계산됩니다.
 
+## 샘플
+
+Package Manager의 **Samples** 탭에서 **Basic Usage**를 가져올 수 있습니다.
+샘플은 별도 씬이나 외부 의존성 없이 다음 사용 흐름을 제공합니다.
+
+- `ResourceManager` 인스턴스 생성과 수명 관리
+- 선택적인 원격 패치와 진행률 표시
+- `CancellationToken`을 이용한 종료 처리
+- 레이블을 이용한 번들 검색과 프리팹 생성
+- 종료 시 인스턴스 및 AssetBundle 해제
+
+자세한 설정 방법은 샘플에 포함된 `README.md`에서 확인할 수 있습니다.
+
 ## 빌드 창
 
 Unity Editor에서 다음 메뉴를 선택합니다.
@@ -70,6 +83,7 @@ Tools > Build Asset Bundle
 AssetManager/
 ├── Runtime/
 ├── Editor/
+├── Samples~/
 ├── CHANGELOG.md
 ├── LICENSE
 ├── README.md

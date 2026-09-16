@@ -5,6 +5,15 @@
 문서 형식은 [변경 이력 유지하기](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 버전은 [유의적 버전](https://semver.org/lang/ko/) 규칙을 따릅니다.
 
+## [2.3.0] - 2026-09-16
+
+### 추가
+
+- `ResourceManager`의 생성, 패치, 프리팹 로드와 해제 흐름을 보여주는
+  `Samples~/BasicUsage` 예제를 추가했습니다.
+- Package Manager의 Samples 탭에서 예제를 가져올 수 있도록
+  `package.json`에 샘플 정보를 등록했습니다.
+
 ## [2.2.1] - 2026-09-16
 
 ### 변경

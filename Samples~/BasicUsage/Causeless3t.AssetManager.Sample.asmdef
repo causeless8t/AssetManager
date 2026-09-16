@@ -1,0 +1,16 @@
+{
+  "name": "Causeless3t.AssetManager.Sample",
+  "rootNamespace": "Causeless3t.AssetManager.Sample",
+  "references": [
+    "Causeless3t.AssetManager"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
